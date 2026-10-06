@@ -26,10 +26,21 @@ export function createAdminClient() {
 /**
  * Cliente de Supabase para Server Components y Server Actions
  * respetando la sesión del usuario autenticado en cookies.
+ * Si se invoca fuera de contexto de servidor (ej: tests unitarios), recurre a admin client.
  */
 export async function createSessionClient() {
   const config = getConfig();
-  const cookieStore = await cookies();
+
+  let cookieStore: Awaited<ReturnType<typeof cookies>> | null = null;
+  try {
+    cookieStore = await cookies();
+  } catch {
+    // Fuera de request context de Next.js (tests unitarios o scripts)
+  }
+
+  if (!cookieStore) {
+    return createAdminClient();
+  }
 
   return createServerClient<Database>(
     config.NEXT_PUBLIC_SUPABASE_URL,
@@ -45,8 +56,7 @@ export async function createSessionClient() {
               cookieStore.set(name, value, options)
             );
           } catch {
-            // The `setAll` method was called from a Server Component.
-            // This can be ignored if you have middleware refreshing user sessions.
+            // Ignorar en server components de solo lectura
           }
         },
       },

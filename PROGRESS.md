@@ -1,8 +1,8 @@
 # Bitácora de Desarrollo - Agente WhatsApp IA (Stakeholders)
 
 ## Estado General
-- **Fase actual:** 01 · Agente de WhatsApp + citas en Google Calendar completada exitosamente. Pasando a Fase 02 · Dashboard de conversaciones.
-- **Paso actual:** Fase 01 completada con verificación integral. Preparando Fase 02.
+- **Fase actual:** 02 · Dashboard de conversaciones completada. Iniciando Fase 03 · Pipeline de leads y contacto directo.
+- **Paso actual:** Fase 02 concluida y verificada con tests E2E y unitarios (40 tests pasando).
 - **Modo:** Autónomo y en bucle.
 - **Proyecto Supabase verificado:** `AGENTE DE IA` (id: `azptifbibgxfumgnpajw`).
 
@@ -13,8 +13,8 @@
 - [x] `npm run check:design` (PASS)
 - [x] `npm run typecheck` (PASS)
 - [x] `npm run lint` (PASS)
-- [x] `npm run test` (PASS - 27 tests pasando)
-- [x] `npm run build` (PASS)
+- [x] `npm run test` (PASS - 40 tests pasando en 9 archivos)
+- [x] `npm run build` (PASS - Next.js 16 App Router compila 12 páginas estáticas y dinámicas)
 
 ---
 
@@ -33,12 +33,12 @@
 - [x] Ningún secreto en el repositorio.
 
 ### Fase 02: Dashboard de Conversaciones
-- [ ] Solo usuarios creados en Supabase Auth pueden entrar (`/login` → `/dashboard`).
-- [ ] Un mensaje que llega por WhatsApp aparece en la lista y en el hilo sin recargar (Realtime).
-- [ ] Puedo responder manualmente dentro de la ventana de 24 h y el bot se apaga en ese chat.
-- [ ] Puedo apagar y encender el bot por conversación y de forma global (`settings.bot_global_enabled`).
-- [ ] Los audios se escuchan y muestran su transcripción desplegable.
-- [ ] El diseño cumple el sistema de 00: blanco, Geist Sans, sin degradados ni emojis.
+- [x] Solo usuarios creados en Supabase Auth pueden entrar (`/login` → `/dashboard`).
+- [x] Un mensaje que llega por WhatsApp aparece en la lista y en el hilo sin recargar (Realtime).
+- [x] Puedo responder manualmente dentro de la ventana de 24 h y el bot se apaga en ese chat.
+- [x] Puedo apagar y encender el bot por conversación y de forma global (`settings.bot_global_enabled`).
+- [x] Los audios se escuchan y muestran su transcripción desplegable.
+- [x] El diseño cumple el sistema de 00: blanco, Geist Sans, sin degradados ni emojis.
 
 ### Fase 03: Pipeline de Leads y Contacto Directo
 - [ ] Cada contacto nuevo aparece en "Nuevo" automáticamente.
