@@ -1,36 +1,103 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Stakeholders · Agente de IA para WhatsApp y Dashboard
 
-## Getting Started
+Agente de atención y agendamiento para WhatsApp (API Cloud oficial de Meta) de la firma **Stakeholders Contadores Públicos** (Medellín, Colombia), integrado con Google Calendar, OpenAI y Supabase.
 
-First, run the development server:
+---
 
+## 1. Requisitos y Ejecución en Local
+
+### Instalación de dependencias
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### Configuración de Variables de Entorno
+Copia el archivo de ejemplo y completa los valores requeridos en `.env`:
+```bash
+cp .env.example .env
+```
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Verifica la integridad de las variables con:
+```bash
+npm run check:env
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+### Migraciones de Base de Datos (Supabase)
+Las migraciones se encuentran en `supabase/migrations/`:
+1. `20261005000001_initial_schema.sql`: Esquema completo de tablas, índices, RPCs de bloqueo atómico y políticas RLS.
+2. `20261005000002_seed_initial_data.sql`: Semilla inicial con las etapas del pipeline, configuración inicial publicada del agente y settings.
 
-## Learn More
+Para aplicarlas en Supabase CLI:
+```bash
+supabase db push
+# O ejecutarlas directamente en el SQL Editor de tu proyecto en Supabase
+```
 
-To learn more about Next.js, take a look at the following resources:
+### Ejecutar el servidor de desarrollo
+```bash
+npm run dev
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+---
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## 2. Google Calendar OAuth 2.0 y Refresh Token
 
-## Deploy on Vercel
+El agente agenda y gestiona citas de diagnóstico (30 minutos) en la cuenta `stakeholdersadm@gmail.com`.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+### Cómo obtener el Refresh Token:
+1. En **Google Cloud Console**, habilita la **Google Calendar API**.
+2. En **Pantalla de consentimiento de OAuth**:
+   - Debe estar en estado **"En producción"** (si está en "Pruebas", el refresh token caduca a los 7 días).
+   - Agrega los alcances: `https://www.googleapis.com/auth/calendar` y `https://www.googleapis.com/auth/calendar.events`.
+3. En **Credenciales**, crea un ID de cliente OAuth 2.0 (Aplicación web):
+   - **URI de redireccionamiento autorizados:** `http://localhost:3000/oauth2callback`
+4. Ejecuta el script de autorización local:
+   ```bash
+   npx tsx scripts/google-auth.ts
+   ```
+5. Abre el enlace generado en el navegador, autoriza con la cuenta de Google y el script guardará automáticamente el `GOOGLE_REFRESH_TOKEN` en tu archivo `.env` sin imprimirlo en terminal.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+---
+
+## 3. Comandos de Verificación del Proyecto
+
+En cualquier momento puedes correr la batería de validaciones:
+```bash
+npm run check:env      # Valida que todas las variables requeridas existan sin mostrar secretos
+npm run check:design   # Valida cumplimiento del sistema de diseño (sobrio, Geist, sin emojis en UI)
+npm run typecheck      # Valida tipos de TypeScript con tsc --noEmit
+npm run lint           # Ejecuta ESLint
+npm run test           # Corre suite completa con Vitest (disponibilidad, webhook, agente, smoke)
+npm run build          # Compila Next.js para producción
+```
+
+---
+
+## 4. Despliegue en Producción (Vercel)
+
+1. **Subir a GitHub:** Crea un repositorio privado en GitHub y haz push del código (verificando que `.env` no se incluya).
+2. **Importar en Vercel:**
+   - Importa el repositorio en Vercel como proyecto Next.js.
+   - Agrega todas las variables de entorno de `.env` en Vercel Settings > Environment Variables.
+   - Configura `WHATSAPP_DRY_RUN=false` y `CALENDAR_DRY_RUN=false`.
+3. **Deploy:** Lanza el despliegue a producción.
+
+---
+
+## 5. Configuración del Webhook en Meta WhatsApp Cloud API
+
+1. En el panel de **Meta for Developers**:
+   - Selecciona tu app > WhatsApp > Configuración.
+   - **URL de devolución de llamada (Callback URL):**
+     `https://<tu-proyecto>.vercel.app/api/webhooks/whatsapp`
+   - **Token de verificación (Verify Token):**
+     El mismo valor configurado en `WHATSAPP_VERIFY_TOKEN`.
+   - Haz clic en **Verificar y guardar**.
+2. **Campos del webhook:**
+   - En **Campos de webhook**, suscríbete al campo `messages`.
+3. **Publicación de la app en Meta:**
+   - En Configuración básica de la aplicación, ingresa la URL de política de privacidad:
+     `https://<tu-proyecto>.vercel.app/privacidad`
+   - Y la URL de eliminación de datos de usuario:
+     `https://<tu-proyecto>.vercel.app/eliminacion-de-datos`
+   - Cambia el modo de la aplicación de **En desarrollo** a **En vivo (Live)**.
