@@ -1,14 +1,35 @@
-export default function AgendaPage() {
-  return (
-    <div className="flex-1 p-6 bg-white">
-      <div className="border border-[#E5E5E5] rounded-[6px] p-8 text-center bg-[#FAFAFA]">
-        <h2 className="text-[16px] font-semibold text-[#0A0A0A]">
-          Agenda de Citas
-        </h2>
-        <p className="text-[13px] text-[#525252] mt-1">
-          Lista diaria y asistencia de diagnósticos en Google Calendar.
-        </p>
-      </div>
-    </div>
-  );
+import { createAdminClient } from "@/lib/supabase/server";
+import { AgendaContainer, type AgendaAppointmentItem } from "@/components/dashboard/agenda/AgendaContainer";
+
+export const dynamic = "force-dynamic";
+
+export default async function AgendaPage() {
+  const supabase = createAdminClient();
+
+  const { data: appointmentsData } = await supabase
+    .from("appointments")
+    .select(`
+      id,
+      contact_id,
+      conversation_id,
+      start_at,
+      end_at,
+      service,
+      status,
+      modality,
+      meet_link,
+      notes,
+      contact:contacts (
+        id,
+        wa_id,
+        name,
+        email,
+        company
+      )
+    `)
+    .order("start_at", { ascending: true });
+
+  const initialAppointments = (appointmentsData || []) as unknown as AgendaAppointmentItem[];
+
+  return <AgendaContainer initialAppointments={initialAppointments} />;
 }

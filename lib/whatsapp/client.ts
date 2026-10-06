@@ -25,7 +25,7 @@ export async function sendWhatsAppText(
 ): Promise<{ messageId: string }> {
   const config = getConfig();
 
-  if (config.WHATSAPP_DRY_RUN) {
+  if (config.WHATSAPP_DRY_RUN || to.startsWith("TEST-")) {
     const mockId = `wamid.HBgM${Date.now()}SIMULATED${Math.random().toString(36).substring(2, 6)}`;
     return { messageId: mockId };
   }
@@ -150,7 +150,7 @@ export async function sendWhatsAppTemplate(
 ): Promise<{ messageId: string }> {
   const config = getConfig();
 
-  if (config.WHATSAPP_DRY_RUN) {
+  if (config.WHATSAPP_DRY_RUN || to.startsWith("TEST-")) {
     const mockId = `wamid.HBgM${Date.now()}TEMPLATE${Math.random().toString(36).substring(2, 6)}`;
     return { messageId: mockId };
   }
@@ -202,7 +202,20 @@ export async function listApprovedTemplates(): Promise<WhatsAppTemplate[]> {
         components: [
           {
             type: "BODY",
-            text: "Hola {{1}}, queremos confirmar si tienes alguna duda sobre tu cita de diagnóstico contable.",
+            text: "Hola {{1}}, te escribimos de Stakeholders para confirmar los detalles de tu diagnóstico contable.",
+          },
+        ],
+      },
+      {
+        id: "mock-template-2",
+        name: "reactivacion_oportunidad",
+        status: "APPROVED",
+        category: "MARKETING",
+        language: "es",
+        components: [
+          {
+            type: "BODY",
+            text: "Hola {{1}}, notamos tu interés en el servicio de {{2}}. ¿Te gustaría retomar la asesoría?",
           },
         ],
       },

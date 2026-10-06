@@ -524,6 +524,17 @@ export async function executeAgentTool(
 
         await supabase.from("leads").update(leadUpdates).eq("id", lead.id);
 
+        if (leadUpdates.stage_id && leadUpdates.stage_id !== lead.stage_id) {
+          await supabase.from("lead_events").insert({
+            lead_id: lead.id,
+            type: "stage_change",
+            from_stage_id: lead.stage_id,
+            to_stage_id: leadUpdates.stage_id,
+            actor: "bot",
+            payload: { reason: "Interés de servicio identificado", service_interest: args.service_interest } as unknown as Json,
+          });
+        }
+
         await supabase.from("lead_events").insert({
           lead_id: lead.id,
           type: "lead_updated",

@@ -1,8 +1,8 @@
 # Bitácora de Desarrollo - Agente WhatsApp IA (Stakeholders)
 
 ## Estado General
-- **Fase actual:** 02 · Dashboard de conversaciones completada. Iniciando Fase 03 · Pipeline de leads y contacto directo.
-- **Paso actual:** Fase 02 concluida y verificada con tests E2E y unitarios (40 tests pasando).
+- **Fase actual:** 03 · Pipeline de leads y contacto directo completada. Iniciando Fase 04 · Editor del cerebro del agente.
+- **Paso actual:** Fase 03 concluida y verificada con tests E2E y unitarios (47 tests pasando en 10 suites).
 - **Modo:** Autónomo y en bucle.
 - **Proyecto Supabase verificado:** `AGENTE DE IA` (id: `azptifbibgxfumgnpajw`).
 
@@ -13,7 +13,7 @@
 - [x] `npm run check:design` (PASS)
 - [x] `npm run typecheck` (PASS)
 - [x] `npm run lint` (PASS)
-- [x] `npm run test` (PASS - 40 tests pasando en 9 archivos)
+- [x] `npm run test` (PASS - 47 tests pasando en 10 archivos)
 - [x] `npm run build` (PASS - Next.js 16 App Router compila 12 páginas estáticas y dinámicas)
 
 ---
@@ -41,12 +41,12 @@
 - [x] El diseño cumple el sistema de 00: blanco, Geist Sans, sin degradados ni emojis.
 
 ### Fase 03: Pipeline de Leads y Contacto Directo
-- [ ] Cada contacto nuevo aparece en "Nuevo" automáticamente.
-- [ ] Al agendar por WhatsApp, la tarjeta pasa sola a "Diagnóstico agendado" sin recargar.
-- [ ] Puedo arrastrar tarjetas (drag-and-drop con `@dnd-kit`) y queda el historial en `lead_events`.
-- [ ] Puedo contactar a un lead con texto libre dentro de 24 h y con plantilla fuera de 24 h.
-- [ ] La agenda muestra las citas y permite marcar asistencia.
-- [ ] Todo respeta el sistema de diseño de 00.
+- [x] Cada contacto nuevo aparece en "Nuevo" automáticamente.
+- [x] Al agendar por WhatsApp, la tarjeta pasa sola a "Diagnóstico agendado" sin recargar.
+- [x] Puedo arrastrar tarjetas (drag-and-drop con `@dnd-kit`) y queda el historial en `lead_events`.
+- [x] Puedo contactar a un lead con texto libre dentro de 24 h y con plantilla fuera de 24 h.
+- [x] La agenda muestra las citas y permite marcar asistencia.
+- [x] Todo respeta el sistema de diseño de 00.
 
 ### Fase 04: Editor del "Cerebro" del Agente
 - [ ] Cambio el tono a "usted" en el borrador, lo pruebo en el probador y el resultado cambia; en WhatsApp todavía no cambia.
