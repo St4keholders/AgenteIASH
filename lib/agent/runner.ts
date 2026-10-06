@@ -193,3 +193,127 @@ export async function runAgentConversation(
     };
   }
 }
+
+export interface SimulationMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export async function runAgentSimulation(
+  simMessages: SimulationMessage[],
+  draftConfig: AgentConfigData,
+  now = new Date()
+): Promise<AgentRunResult> {
+  const startTime = Date.now();
+  const config = getConfig();
+  const supabase = createAdminClient();
+  const openai = new OpenAI({
+    apiKey: config.OPENAI_API_KEY,
+    dangerouslyAllowBrowser: true,
+  });
+
+  const systemPrompt = buildSystemPrompt(draftConfig, now);
+
+  const messages: ChatCompletionMessageParam[] = [
+    { role: "system", content: systemPrompt },
+    ...simMessages.map((m) => ({
+      role: m.role,
+      content: m.content,
+    })),
+  ];
+
+  const executedTools: Array<{ tool: string; args: Record<string, unknown>; result: Record<string, unknown> }> = [];
+  let totalTokensIn = 0;
+  let totalTokensOut = 0;
+  let finalReply = "";
+  let loopCount = 0;
+  const maxLoops = 5;
+
+  try {
+    while (loopCount < maxLoops) {
+      loopCount++;
+
+      const completion = await openai.chat.completions.create({
+        model: config.OPENAI_MODEL,
+        messages,
+        tools: AGENT_TOOLS_DEFINITIONS,
+        tool_choice: "auto",
+        temperature: 0.2,
+      });
+
+      if (completion.usage) {
+        totalTokensIn += completion.usage.prompt_tokens || 0;
+        totalTokensOut += completion.usage.completion_tokens || 0;
+      }
+
+      const responseMessage = completion.choices[0]?.message;
+      if (!responseMessage) break;
+
+      messages.push(responseMessage);
+
+      if (responseMessage.tool_calls && responseMessage.tool_calls.length > 0) {
+        for (const toolCall of responseMessage.tool_calls) {
+          if (toolCall.type !== "function") continue;
+          const fn = toolCall.function;
+          let parsedArgs: Record<string, unknown> = {};
+          try {
+            parsedArgs = JSON.parse(fn.arguments);
+          } catch {
+            parsedArgs = {};
+          }
+
+          const toolResult = await executeAgentTool(
+            fn.name,
+            parsedArgs,
+            {
+              contactId: "SIMULATED-CONTACT",
+              conversationId: "SIMULATED-CONVERSATION",
+              supabase,
+              dryRun: true,
+              agentConfig: draftConfig,
+            }
+          );
+
+          executedTools.push({
+            tool: fn.name,
+            args: parsedArgs,
+            result: toolResult,
+          });
+
+          const toolMessage: ChatCompletionToolMessageParam = {
+            role: "tool",
+            tool_call_id: toolCall.id,
+            content: JSON.stringify(toolResult),
+          };
+          messages.push(toolMessage);
+        }
+      } else {
+        finalReply = responseMessage.content || "";
+        break;
+      }
+    }
+
+    if (!finalReply) {
+      finalReply = "Entendido. ¿En qué más puedo colaborarle?";
+    }
+
+    const latencyMs = Date.now() - startTime;
+    return {
+      reply: finalReply,
+      toolCallsExecuted: executedTools,
+      tokensIn: totalTokensIn,
+      tokensOut: totalTokensOut,
+      latencyMs,
+    };
+  } catch (error: unknown) {
+    const latencyMs = Date.now() - startTime;
+    const errorMessage = error instanceof Error ? error.message : "Error desconocido en simulación";
+    return {
+      reply: "Disculpe, ocurrió un error en la simulación del asistente.",
+      toolCallsExecuted: executedTools,
+      latencyMs,
+      error: errorMessage,
+    };
+  }
+}
+

@@ -26,7 +26,7 @@ const navItems = [
     icon: Calendar,
   },
   {
-    name: "Configuración",
+    name: "Agente IA",
     href: "/dashboard/agente",
     icon: Settings,
   },

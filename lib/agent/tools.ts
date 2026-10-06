@@ -15,6 +15,7 @@ import {
 } from "@/lib/google/calendar";
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import type { Json } from "@/lib/database.types";
+import { type AgentConfigData, getPublishedConfig } from "@/lib/agent/prompt";
 
 export const AGENT_TOOLS_DEFINITIONS: ChatCompletionTool[] = [
   {
@@ -167,6 +168,7 @@ export interface ToolExecutionContext {
   conversationId: string;
   supabase?: ReturnType<typeof createAdminClient>;
   dryRun?: boolean;
+  agentConfig?: AgentConfigData;
 }
 
 /**
@@ -206,7 +208,37 @@ export async function executeAgentTool(
         }
       }
 
-      const availableSlots = getAvailableSlotsForDay(dateStr, allBusy, 4);
+      // Obtener configuración de horarios dinámica
+      let configData = context.agentConfig;
+      if (!configData) {
+        try {
+          const published = await getPublishedConfig(supabase);
+          configData = published.data;
+        } catch {
+          // Fallback a default
+        }
+      }
+
+      const hc = configData?.horarios_citas;
+      const startH = hc ? parseInt(hc.hora_inicio_laboral.split(":")[0], 10) : 7;
+      const endH = hc ? parseInt(hc.hora_fin_laboral.split(":")[0], 10) : 19;
+      const maxOptions = hc?.max_opciones_ofrecer_por_dia || 4;
+
+      const dynamicAvailabilityConfig = {
+        ...DEFAULT_AVAILABILITY_CONFIG,
+        startHour: isNaN(startH) ? 7 : startH,
+        endHour: isNaN(endH) ? 19 : endH,
+        durationMinutes: hc?.duracion_minutos || 30,
+        minNoticeHours: hc?.anticipacion_minima_horas || 2,
+        maxDaysAhead: hc?.maximo_dias_adelanto || 30,
+      };
+
+      const availableSlots = getAvailableSlotsForDay(
+        dateStr,
+        allBusy,
+        maxOptions,
+        dynamicAvailabilityConfig
+      );
 
       if (availableSlots.length === 0) {
         return {
@@ -271,6 +303,20 @@ export async function executeAgentTool(
       const serviceName = String(args.service || "Diagnóstico Gratuito");
       const clientEmail = typeof args.email === "string" ? args.email : undefined;
       const notes = typeof args.notes === "string" ? args.notes : null;
+
+      if (context.dryRun) {
+        return {
+          success: true,
+          simulated: true,
+          appointment_id: `SIMULATED-${Date.now()}`,
+          start: formatDateBogota(slotStart),
+          time: formatTimeBogota(slotStart),
+          service: serviceName,
+          modality,
+          meet_link: modality === "virtual" ? "https://meet.google.com/simulated-meet-test" : null,
+          message: `[SIMULACIÓN] Se crearía una cita el ${formatDateBogota(slotStart)} a las ${formatTimeBogota(slotStart)} para "${clientName}" con servicio "${serviceName}" (${modality}). En el probador no se crea evento en Google Calendar ni se escribe en la base de datos.`,
+        };
+      }
 
       // Crear evento en Google Calendar
       const calEvent = await createCalendarEvent({
@@ -347,6 +393,16 @@ export async function executeAgentTool(
     }
 
     case "reschedule_appointment": {
+      if (context.dryRun) {
+        const newStart = new Date(String(args.new_start_iso || ""));
+        return {
+          success: true,
+          simulated: true,
+          new_start_formatted: `${formatDateBogota(newStart)}, ${formatTimeBogota(newStart)}`,
+          message: `[SIMULACIÓN] Cita reprogramada para el ${formatDateBogota(newStart)} a las ${formatTimeBogota(newStart)}. En modo simulación no se modifica Calendar ni BD.`,
+        };
+      }
+
       const { data: app } = await supabase
         .from("appointments")
         .select("id, google_event_id")
@@ -387,6 +443,14 @@ export async function executeAgentTool(
     }
 
     case "cancel_appointment": {
+      if (context.dryRun) {
+        return {
+          success: true,
+          simulated: true,
+          message: "[SIMULACIÓN] Cita cancelada con éxito. En modo simulación no se modifica Calendar ni BD.",
+        };
+      }
+
       const { data: app } = await supabase
         .from("appointments")
         .select("id, google_event_id, contact_id")
@@ -448,6 +512,23 @@ export async function executeAgentTool(
     }
 
     case "list_my_appointments": {
+      if (context.dryRun) {
+        return {
+          has_appointments: true,
+          simulated: true,
+          appointments: [
+            {
+              id: "SIMULATED-APP-1",
+              service: "Diagnóstico Contable y Tributario",
+              start: "Mañana a las 10:00 AM",
+              modality: "virtual",
+              meet_link: "https://meet.google.com/simulated-meet-test",
+              status: "scheduled",
+            },
+          ],
+        };
+      }
+
       const { data: appointments } = await supabase
         .from("appointments")
         .select("id, start_at, modality, service, meet_link, status")
@@ -477,6 +558,15 @@ export async function executeAgentTool(
     }
 
     case "update_lead": {
+      if (context.dryRun) {
+        return {
+          success: true,
+          simulated: true,
+          updated_data: args,
+          message: "[SIMULACIÓN] Datos del lead capturados y simulados en memoria sin escribir a BD.",
+        };
+      }
+
       // 1. Actualizar contacto si aplica
       const contactUpdates: { name?: string; email?: string; company?: string; updated_at?: string } = {};
       if (typeof args.name === "string") contactUpdates.name = args.name;
@@ -547,6 +637,14 @@ export async function executeAgentTool(
     }
 
     case "request_human": {
+      if (context.dryRun) {
+        return {
+          escalated: true,
+          simulated: true,
+          message: "[SIMULACIÓN] Solicitud de asesor humano recibida. En producción se desactiva el bot.",
+        };
+      }
+
       await supabase
         .from("conversations")
         .update({

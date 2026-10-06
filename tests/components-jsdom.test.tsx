@@ -7,6 +7,10 @@ import { MessageThread } from "@/components/dashboard/conversaciones/MessageThre
 import { ContactDetails } from "@/components/dashboard/conversaciones/ContactDetails";
 import { PipelineContainer } from "@/components/dashboard/pipeline/PipelineContainer";
 import { AgendaContainer } from "@/components/dashboard/agenda/AgendaContainer";
+import { AgentBrainEditor } from "@/components/dashboard/agente/AgentBrainEditor";
+import { PromptPreviewModal } from "@/components/dashboard/agente/PromptPreviewModal";
+import { VersionHistoryModal } from "@/components/dashboard/agente/VersionHistoryModal";
+import type { AgentConfigData } from "@/lib/agent/prompt";
 
 describe("Dashboard Components (JSDOM)", () => {
   it("renders GlobalBotToggle with active status", () => {
@@ -204,5 +208,118 @@ describe("Dashboard Components (JSDOM)", () => {
     expect(screen.getByText("Gabriel Gerente")).toBeInTheDocument();
     expect(screen.getByText("Declaración de Renta")).toBeInTheDocument();
     expect(screen.getByText("Google Meet")).toBeInTheDocument();
+  });
+
+  it("renders AgentBrainEditor with tabs and simulator panel", () => {
+    const mockDraft: AgentConfigData = {
+      identidad: {
+        nombre: "Asistente Stakeholders",
+        presentacion: "Soy el asistente virtual",
+        trato: "tu",
+        formalidad: "Profesional",
+        longitud_maxima: "Breve",
+        usar_emojis: "moderado",
+        firma: "Equipo Stakeholders",
+      },
+      conocimiento: {
+        descripcion_negocio: "Firma contable en Medellín",
+        direccion_presencial: "El Poblado, Medellín",
+        servicios: [
+          {
+            id: "contabilidad",
+            nombre: "Contabilidad para empresas",
+            descripcion: "Servicio contable mensual",
+          },
+        ],
+        preguntas_frecuentes: [],
+      },
+      embudo: {
+        etapas: [
+          { orden: 1, nombre: "Saludo", objetivo: "Dar la bienvenida" },
+        ],
+      },
+      reglas: {
+        prohibiciones: ["No inventar precios"],
+        escalamiento_humano: "Cuando pidan asesor",
+        temas_ajenos: "Rechazar amablemente",
+      },
+      horarios_citas: {
+        tipo_cita: "diagnostico",
+        duracion_minutos: 30,
+        hora_inicio_laboral: "07:00",
+        hora_fin_laboral: "19:00",
+        dias_laborales: [1, 2, 3, 4, 5],
+        anticipacion_minima_horas: 2,
+        maximo_dias_adelanto: 30,
+        modalidades: ["virtual", "presencial"],
+        max_opciones_ofrecer_por_dia: 3,
+        zona_horaria: "America/Bogota",
+      },
+    };
+
+    render(
+      <AgentBrainEditor
+        initialDraft={mockDraft}
+        publishedVersion={1}
+        draftVersion={2}
+        history={[]}
+      />
+    );
+
+    expect(screen.getByText("Editor del Cerebro del Agente")).toBeInTheDocument();
+    expect(screen.getByText("Identidad y tono")).toBeInTheDocument();
+    expect(screen.getByText("Conocimiento del negocio")).toBeInTheDocument();
+    expect(screen.getByText("Probador del Agente")).toBeInTheDocument();
+    expect(screen.getByText("Guardar borrador")).toBeInTheDocument();
+    expect(screen.getByText("Publicar cambios")).toBeInTheDocument();
+  });
+
+  it("renders PromptPreviewModal with full prompt content", () => {
+    render(
+      <PromptPreviewModal
+        prompt="Eres el asistente virtual oficial de Stakeholders..."
+        onClose={() => {}}
+      />
+    );
+
+    expect(screen.getByText("Vista previa del System Prompt")).toBeInTheDocument();
+    expect(screen.getByText("Eres el asistente virtual oficial de Stakeholders...")).toBeInTheDocument();
+    expect(screen.getByText("Copiar prompt")).toBeInTheDocument();
+  });
+
+  it("renders VersionHistoryModal with versions list", () => {
+    const mockVersions = [
+      {
+        id: "v-1",
+        version: 1,
+        status: "published",
+        created_by: "Admin",
+        created_at: new Date().toISOString(),
+        published_at: new Date().toISOString(),
+      },
+      {
+        id: "v-2",
+        version: 2,
+        status: "archived",
+        created_by: "Admin",
+        created_at: new Date().toISOString(),
+        published_at: null,
+      },
+    ];
+
+    render(
+      <VersionHistoryModal
+        versions={mockVersions}
+        onRestore={async () => {}}
+        onClose={() => {}}
+        isRestoring={false}
+      />
+    );
+
+    expect(screen.getByText("Historial de versiones del agente")).toBeInTheDocument();
+    expect(screen.getByText("Versión 1")).toBeInTheDocument();
+    expect(screen.getByText("Publicado")).toBeInTheDocument();
+    expect(screen.getByText("Versión 2")).toBeInTheDocument();
+    expect(screen.getByText("Archivado")).toBeInTheDocument();
   });
 });

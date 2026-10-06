@@ -1,14 +1,32 @@
-export default function AgentePage() {
+import { createAdminClient } from "@/lib/supabase/server";
+import { getPublishedConfig, getDraftConfig, type AgentConfigData } from "@/lib/agent/prompt";
+import { AgentBrainEditor } from "@/components/dashboard/agente/AgentBrainEditor";
+
+export const dynamic = "force-dynamic";
+
+export default async function AgentePage() {
+  const supabase = createAdminClient();
+  const published = await getPublishedConfig(supabase);
+  const draft = await getDraftConfig(supabase);
+
+  const initialDraft: AgentConfigData = draft ? draft.data : published.data;
+  const draftVersion = draft ? draft.version : published.version + 1;
+
+  const { data: rawHistory } = await supabase
+    .from("agent_configs")
+    .select("id, version, status, created_by, created_at, published_at")
+    .order("version", { ascending: false });
+
+  const history = rawHistory || [];
+
   return (
-    <div className="flex-1 p-6 bg-white">
-      <div className="border border-[#E5E5E5] rounded-[6px] p-8 text-center bg-[#FAFAFA]">
-        <h2 className="text-[16px] font-semibold text-[#0A0A0A]">
-          Configuración del Agente
-        </h2>
-        <p className="text-[13px] text-[#525252] mt-1">
-          Editor del cerebro, tono, conocimiento y reglas de negocio.
-        </p>
-      </div>
+    <div className="flex-1 flex flex-col h-full bg-white overflow-hidden">
+      <AgentBrainEditor
+        initialDraft={initialDraft}
+        publishedVersion={published.version}
+        draftVersion={draftVersion}
+        history={history}
+      />
     </div>
   );
 }

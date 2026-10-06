@@ -8,6 +8,16 @@ import {
   listApprovedTemplates,
   type WhatsAppTemplate,
 } from "@/lib/whatsapp/client";
+import {
+  AgentConfigZodSchema,
+  type AgentConfigData,
+  buildSystemPrompt,
+} from "@/lib/agent/prompt";
+import {
+  runAgentSimulation,
+  type SimulationMessage,
+  type AgentRunResult,
+} from "@/lib/agent/runner";
 import { revalidatePath } from "next/cache";
 
 function safeRevalidate(path: string, type?: "page" | "layout") {
@@ -432,3 +442,174 @@ export async function sendTemplateMessageAction(
 export async function getTemplatesAction(): Promise<WhatsAppTemplate[]> {
   return listApprovedTemplates();
 }
+
+export async function saveAgentDraftAction(data: AgentConfigData) {
+  const parsed = AgentConfigZodSchema.safeParse(data);
+  if (!parsed.success) {
+    const errorDetails = parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join(", ");
+    throw new Error(`Validación de configuración fallida: ${errorDetails}`);
+  }
+
+  const supabase = createAdminClient();
+
+  // Buscar si ya existe un borrador
+  const { data: existingDraft } = await supabase
+    .from("agent_configs")
+    .select("id, version")
+    .eq("status", "draft")
+    .limit(1)
+    .maybeSingle();
+
+  if (existingDraft) {
+    const { error: updateErr } = await supabase
+      .from("agent_configs")
+      .update({
+        data: parsed.data as unknown as Json,
+        created_at: new Date().toISOString(),
+      })
+      .eq("id", existingDraft.id);
+
+    if (updateErr) {
+      throw new Error(`Error actualizando borrador: ${updateErr.message}`);
+    }
+
+    safeRevalidate("/dashboard/agente");
+    return { success: true, version: existingDraft.version };
+  }
+
+  // Si no existe borrador, obtener la versión máxima
+  const { data: allConfigs } = await supabase
+    .from("agent_configs")
+    .select("version")
+    .order("version", { ascending: false })
+    .limit(1);
+
+  const nextVersion = (allConfigs?.[0]?.version ?? 0) + 1;
+
+  const { error: insertErr } = await supabase.from("agent_configs").insert({
+    version: nextVersion,
+    status: "draft",
+    data: parsed.data as unknown as Json,
+    created_by: "Admin",
+  });
+
+  if (insertErr) {
+    throw new Error(`Error creando borrador: ${insertErr.message}`);
+  }
+
+  safeRevalidate("/dashboard/agente");
+  return { success: true, version: nextVersion };
+}
+
+export async function publishAgentConfigAction(data: AgentConfigData) {
+  const parsed = AgentConfigZodSchema.safeParse(data);
+  if (!parsed.success) {
+    const errorDetails = parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join(", ");
+    throw new Error(`Validación de configuración fallida: ${errorDetails}`);
+  }
+
+  const supabase = createAdminClient();
+
+  // 1. Archivar cualquier versión publicada actual
+  await supabase
+    .from("agent_configs")
+    .update({ status: "archived" })
+    .eq("status", "published");
+
+  // 2. Eliminar o archivar borradores existentes
+  await supabase
+    .from("agent_configs")
+    .delete()
+    .eq("status", "draft");
+
+  // 3. Determinar nueva versión
+  const { data: maxRow } = await supabase
+    .from("agent_configs")
+    .select("version")
+    .order("version", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const newVersion = (maxRow?.version ?? 0) + 1;
+
+  // 4. Insertar versión publicada
+  const { error: insertErr } = await supabase.from("agent_configs").insert({
+    version: newVersion,
+    status: "published",
+    data: parsed.data as unknown as Json,
+    created_by: "Admin",
+    published_at: new Date().toISOString(),
+  });
+
+  if (insertErr) {
+    throw new Error(`Error al publicar configuración: ${insertErr.message}`);
+  }
+
+  safeRevalidate("/dashboard/agente");
+  return { success: true, version: newVersion };
+}
+
+export async function getAgentVersionHistoryAction() {
+  const supabase = createAdminClient();
+  const { data, error } = await supabase
+    .from("agent_configs")
+    .select("id, version, status, created_by, created_at, published_at, data")
+    .order("version", { ascending: false });
+
+  if (error) {
+    throw new Error(`Error obteniendo historial: ${error.message}`);
+  }
+
+  return data ?? [];
+}
+
+export async function restoreAgentVersionAction(versionId: string) {
+  const supabase = createAdminClient();
+  const { data: targetRow, error } = await supabase
+    .from("agent_configs")
+    .select("id, version, data")
+    .eq("id", versionId)
+    .single();
+
+  if (error || !targetRow) {
+    throw new Error(`No se encontró la versión para restaurar: ${error?.message}`);
+  }
+
+  const parsed = AgentConfigZodSchema.safeParse(targetRow.data);
+  if (!parsed.success) {
+    throw new Error("La versión a restaurar contiene datos inválidos según el esquema actual.");
+  }
+
+  // Guardar como borrador activo
+  await saveAgentDraftAction(parsed.data);
+
+  safeRevalidate("/dashboard/agente");
+  return { success: true, restoredVersion: targetRow.version, data: parsed.data };
+}
+
+export async function simulateAgentTurnAction(
+  messages: SimulationMessage[],
+  draftConfig: AgentConfigData
+): Promise<AgentRunResult> {
+  const parsed = AgentConfigZodSchema.safeParse(draftConfig);
+  if (!parsed.success) {
+    return {
+      reply: "Error de configuración: Hay campos requeridos inválidos en el borrador.",
+      toolCallsExecuted: [],
+      latencyMs: 0,
+      error: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join(", "),
+    };
+  }
+
+  return runAgentSimulation(messages, parsed.data);
+}
+
+export async function getSystemPromptPreviewAction(config: AgentConfigData): Promise<string> {
+  const parsed = AgentConfigZodSchema.safeParse(config);
+  if (!parsed.success) {
+    return "Error: La configuración actual contiene errores de validación y no se puede generar la vista previa.";
+  }
+
+  return buildSystemPrompt(parsed.data, new Date());
+}
+
