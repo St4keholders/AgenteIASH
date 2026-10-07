@@ -40,3 +40,16 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# bitácoras y archivos locales de agentes de IA (no se versionan)
+PROGRESS.md
+.antigravity/
+.claude/settings.local.json
+
+# supabase cli local
+supabase/.temp/
+supabase/.branches/
+
+# editores y logs
+.idea/
+*.log

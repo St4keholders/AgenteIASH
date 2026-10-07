@@ -11,11 +11,11 @@ describe("Webhook BSUID & Error Serialization Support", () => {
   const supabase = createAdminClient();
 
   const cleanupWaIds = [
-    "CO.1561528059078401",
-    "CO.9988776655443322",
-    "573025219775",
-    "573009991122",
-    "CO.5544332211009988",
+    "CO.TEST0000000001",
+    "CO.TEST0000000002",
+    "5799900000001",
+    "5799900000002",
+    "CO.TEST0000000003",
   ];
 
   function makeSignedRequest(bodyObj: unknown) {
@@ -174,7 +174,7 @@ describe("Webhook BSUID & Error Serialization Support", () => {
   it(
     "2. BSUID sin user_id y sin contacts[]: saves contact, inbound message, and sends 1 reply to BSUID",
     async () => {
-      const bsuid = "CO.1561528059078401";
+      const bsuid = "CO.TEST0000000001";
       const wamid = `wamid.HBgTQ08uMTU2MTUyODA1OTA3ODQwMRUU_${Date.now()}`;
 
       const payload = {
@@ -234,7 +234,7 @@ describe("Webhook BSUID & Error Serialization Support", () => {
   it(
     "3. BSUID con user_id y contacts[].profile: updates profile name and keeps phone null",
     async () => {
-      const bsuid = "CO.1561528059078401";
+      const bsuid = "CO.TEST0000000001";
       const wamid = `wamid.BSUID_PROFILE_${Date.now()}`;
 
       const payload = {
@@ -285,8 +285,8 @@ describe("Webhook BSUID & Error Serialization Support", () => {
   it(
     "4. Teléfono + BSUID juntos en el payload: stores both and resolves cleanly",
     async () => {
-      const phone = "573025219775";
-      const bsuid = "CO.9988776655443322";
+      const phone = "5799900000001";
+      const bsuid = "CO.TEST0000000002";
       const wamid = `wamid.DUAL_${Date.now()}`;
 
       const payload = {
@@ -344,8 +344,8 @@ describe("Webhook BSUID & Error Serialization Support", () => {
   it(
     "5. Mismo contacto llegando primero con teléfono y después con BSUID: no duplicates created",
     async () => {
-      const phone = "573009991122";
-      const bsuid = "CO.5544332211009988";
+      const phone = "5799900000002";
+      const bsuid = "CO.TEST0000000003";
       const wamid1 = `wamid.ROUND1_${Date.now()}`;
       const wamid2 = `wamid.ROUND2_${Date.now()}`;
 

@@ -101,3 +101,11 @@ npm run build          # Compila Next.js para producción
    - Y la URL de eliminación de datos de usuario:
      `https://<tu-proyecto>.vercel.app/eliminacion-de-datos`
    - Cambia el modo de la aplicación de **En desarrollo** a **En vivo (Live)**.
+
+## Documentación
+
+- `docs/specs/`: especificaciones del proyecto (contexto general y fases 01 a 04).
+- `docs/DEPLOY.md`: pasos de despliegue en Vercel, Meta y Supabase.
+- `docs/AUDITORIA.md`: registro de auditorías técnicas.
+
+Las pruebas (`npm test`) fuerzan `WHATSAPP_DRY_RUN=true` y `CALENDAR_DRY_RUN=true`: nunca envían mensajes reales. Usa solo identificadores sintéticos (teléfonos `57999…`, BSUID `CO.TEST…`).

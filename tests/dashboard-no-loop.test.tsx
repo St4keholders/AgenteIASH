@@ -73,8 +73,8 @@ describe("Dashboard No Infinite Loop Verification", () => {
         needs_human: false,
         contact: {
           id: "contact-1",
-          wa_id: "+573001234567",
-          phone: "+573001234567",
+          wa_id: "+5799900000011",
+          phone: "+5799900000011",
           name: "Test Contact",
           email: "test@example.com",
           company: "Test Co",
@@ -112,8 +112,8 @@ describe("Dashboard No Infinite Loop Verification", () => {
         needs_human: false,
         contact: {
           id: "contact-1",
-          wa_id: "+573001234567",
-          phone: "+573001234567",
+          wa_id: "+5799900000011",
+          phone: "+5799900000011",
           name: "Read Contact",
           email: null,
           company: null,
@@ -131,8 +131,8 @@ describe("Dashboard No Infinite Loop Verification", () => {
         needs_human: false,
         contact: {
           id: "contact-2",
-          wa_id: "+573009876543",
-          phone: "+573009876543",
+          wa_id: "+5799900000012",
+          phone: "+5799900000012",
           name: "Unread Contact",
           email: null,
           company: null,

@@ -44,7 +44,7 @@ Antes de desplegar, despliega la sección **Environment Variables** en Vercel y 
 | :--- | :--- | :--- |
 | `NEXT_PUBLIC_APP_URL` | URL de tu despliegue en Vercel | `https://agente-stakeholders.vercel.app` |
 | `APP_TIMEZONE` | Zona horaria del negocio | `America/Bogota` |
-| `NEXT_PUBLIC_SUPABASE_URL` | URL de Supabase del proyecto "AGENTE DE IA" | `https://azptifbibgxfumgnpajw.supabase.co` |
+| `NEXT_PUBLIC_SUPABASE_URL` | URL de Supabase del proyecto "AGENTE DE IA" | `https://<tu-proyecto>.supabase.co` |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Llave anónima pública de Supabase | Tu clave pública (`eyJ...`) |
 | `SUPABASE_SERVICE_ROLE_KEY` | Llave de servicio (secreta, solo backend) | Tu service role key (`eyJ...`) |
 | `OPENAI_API_KEY` | Clave API de OpenAI | `sk-proj-...` |
@@ -98,7 +98,7 @@ Para que cualquier usuario de WhatsApp (no solo números de prueba) pueda escrib
 
 Para poder acceder al dashboard protegido (`/dashboard`):
 
-1. Ve a [Supabase Dashboard](https://supabase.com/dashboard/project/azptifbibgxfumgnpajw).
+1. Ve a [Supabase Dashboard](https://supabase.com/dashboard/project/<tu-proyecto>).
 2. En el menú lateral izquierdo, haz clic en **Authentication** → **Users**.
 3. Haz clic en el botón verde **Add User** → **Create user**.
 4. Ingresa los datos:

@@ -32,8 +32,8 @@ describe("Dashboard Components (JSDOM)", () => {
         needs_human: true,
         contact: {
           id: "contact-1",
-          wa_id: "+573009998877",
-          phone: "+573009998877",
+          wa_id: "+5799900000013",
+          phone: "+5799900000013",
           name: "Carlos Contador",
           email: "carlos@example.com",
           company: "Empresa SAS",
@@ -86,7 +86,7 @@ describe("Dashboard Components (JSDOM)", () => {
       <MessageThread
         conversationId="conv-1"
         contactName="Carlos Contador"
-        contactPhone="+573009998877"
+        contactPhone="+5799900000013"
         lastInboundAt={new Date(Date.now() - 30 * 60 * 1000).toISOString()} // 30 min ago
         messages={mockMessages}
       />
@@ -105,8 +105,8 @@ describe("Dashboard Components (JSDOM)", () => {
         needsHuman={true}
         contact={{
           id: "contact-1",
-          wa_id: "+573009998877",
-          phone: "+573009998877",
+          wa_id: "+5799900000013",
+          phone: "+5799900000013",
           name: "Carlos Contador",
           email: "carlos@example.com",
           company: "Empresa SAS",
@@ -161,7 +161,7 @@ describe("Dashboard Components (JSDOM)", () => {
         updated_at: new Date().toISOString(),
         contact: {
           id: "c-1",
-          wa_id: "+573110001122",
+          wa_id: "+5799900000014",
           name: "Daniela Directora",
           email: "daniela@directora.com",
           company: "Directora SAS",
@@ -194,7 +194,7 @@ describe("Dashboard Components (JSDOM)", () => {
         notes: null,
         contact: {
           id: "c-1",
-          wa_id: "+573001234567",
+          wa_id: "+5799900000011",
           name: "Gabriel Gerente",
           email: "gabriel@gerente.com",
           company: "Comercializadora SAS",

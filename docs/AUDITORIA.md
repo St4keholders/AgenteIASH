@@ -1,7 +1,7 @@
 # Documento de Auditoría Integral — Agente WhatsApp IA (Stakeholders)
 
 **Fecha de finalización:** Octubre 2026  
-**Proyecto Supabase:** `AGENTE DE IA` (`azptifbibgxfumgnpajw`)  
+**Proyecto Supabase:** `AGENTE DE IA`   
 **Stack tecnológico:** Next.js 16 (App Router), React 19, TypeScript 5, Tailwind CSS 4, Supabase (Auth, Postgres, RLS, Realtime), OpenAI API (gpt-4o-mini, Whisper), Meta WhatsApp Cloud API, Google Calendar API v3, `@dnd-kit`.
 
 ---
