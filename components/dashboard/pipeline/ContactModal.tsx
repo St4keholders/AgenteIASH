@@ -130,10 +130,21 @@ export function ContactModal({ lead, isOpen, onClose, onSuccess }: ContactModalP
         <div className="p-4 border-b border-[#E5E5E5] flex items-center justify-between">
           <div>
             <h3 className="text-[14px] font-semibold text-[#0A0A0A]">
-              Contactar a {lead.contact.name || lead.contact.wa_id}
+              Contactar a{" "}
+              {lead.contact.name ||
+                (!lead.contact.phone &&
+                Boolean(
+                  lead.contact.bsuid ||
+                    (lead.contact.wa_id && !/^\+?\d+$/.test(lead.contact.wa_id))
+                )
+                  ? "Usuario de WhatsApp"
+                  : lead.contact.wa_id)}
             </h3>
             <p className="text-[12px] text-[#525252]">
-              {lead.contact.wa_id}
+              {lead.contact.phone ||
+                (lead.contact.name
+                  ? `Usuario de WhatsApp (${lead.contact.name})`
+                  : "Usuario de WhatsApp")}
             </p>
           </div>
           <button

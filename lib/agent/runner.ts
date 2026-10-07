@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { getPublishedConfig, buildSystemPrompt, AgentConfigData } from "@/lib/agent/prompt";
 import { AGENT_TOOLS_DEFINITIONS, executeAgentTool } from "@/lib/agent/tools";
 import { withExponentialBackoff } from "@/lib/utils/retry";
+import { formatError } from "@/lib/utils/format-error";
 import type {
   ChatCompletionMessageParam,
   ChatCompletionToolMessageParam,
@@ -89,7 +90,7 @@ export async function runAgentConversation(
       systemPrompt = buildSystemPrompt(published.data, now);
     }
   } catch (err: unknown) {
-    console.error("Error reading agent config:", err);
+    console.error("Error reading agent config:", formatError(err));
     // Fallback prompt if config loading fails
     systemPrompt = "Eres el asistente virtual de Stakeholders Contadores Públicos en Medellín, Colombia.";
   }
@@ -223,9 +224,9 @@ export async function runAgentConversation(
     };
   } catch (error: unknown) {
     const latencyMs = Date.now() - startTime;
-    console.error("Agent execution error:", error);
+    console.error("Agent execution error:", formatError(error));
 
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
+    const errorMessage = formatError(error);
     const fallbackReply =
       "Hola, experimenté una breve interrupción en mi sistema. Ya tomé nota de tu consulta y un asesor del equipo se comunicará contigo lo antes posible.";
 

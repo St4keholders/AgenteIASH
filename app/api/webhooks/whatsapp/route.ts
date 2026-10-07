@@ -5,6 +5,7 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { sendWhatsAppText, downloadWhatsAppMedia } from "@/lib/whatsapp/client";
 import { transcribeAudio } from "@/lib/openai/transcribe";
 import { runAgentConversation } from "@/lib/agent/runner";
+import { formatError } from "@/lib/utils/format-error";
 
 interface WhatsAppWebhookPayload {
   object?: string;
@@ -54,9 +55,17 @@ function logError(errorData: {
   step: string;
   wamid?: string | null;
   conversation_id?: string | null;
-  error: string;
+  error: unknown;
 }) {
-  console.error(JSON.stringify({ evt: "webhook_error", ...errorData }));
+  console.error(
+    JSON.stringify({
+      evt: "webhook_error",
+      step: errorData.step,
+      wamid: errorData.wamid || undefined,
+      conversation_id: errorData.conversation_id || undefined,
+      error: formatError(errorData.error),
+    })
+  );
 }
 
 export async function GET(req: NextRequest) {
@@ -124,7 +133,7 @@ export async function POST(req: NextRequest) {
       } catch (err: unknown) {
         logError({
           step: "after_background",
-          error: err instanceof Error ? err.message : String(err),
+          error: err,
         });
       }
     });
@@ -133,7 +142,7 @@ export async function POST(req: NextRequest) {
     void processWebhookPayload(payload, { mockOpenAI: isMockOpenAI }).catch((err: unknown) => {
       logError({
         step: "test_background",
-        error: err instanceof Error ? err.message : String(err),
+        error: err,
       });
     });
   }
@@ -191,12 +200,39 @@ async function processWebhookPayload(
         >();
 
         for (const msg of val.messages) {
-          const from = msg.from;
           const wamid = msg.id;
           const msgType = msg.type;
           const timestamp = msg.timestamp
             ? new Date(Number(msg.timestamp) * 1000).toISOString()
             : new Date().toISOString();
+
+          const rawFrom = msg.from;
+          const rawUserId = msg.user_id;
+
+          // Obtener perfil correspondiente a este remitente
+          const matchingContact =
+            val.contacts?.find(
+              (c) =>
+                (rawFrom && c.wa_id === rawFrom) ||
+                (rawUserId && c.user_id === rawUserId) ||
+                (rawFrom && c.user_id === rawFrom)
+            ) || val.contacts?.[0];
+
+          const contactWaId = matchingContact?.wa_id;
+          const contactUserId = matchingContact?.user_id;
+          const rawProfileName = matchingContact?.profile?.name?.trim();
+          const profileName = rawProfileName && rawProfileName.length > 0 ? rawProfileName : null;
+
+          // Determinar el identificador remitente efectivo (nunca vacío)
+          const from = (rawFrom || rawUserId || contactWaId || contactUserId || "").trim();
+          if (!from) {
+            logError({
+              step: "missing_sender_id",
+              wamid,
+              error: "No sender identifier found in payload (from, user_id, and contacts empty)",
+            });
+            continue;
+          }
 
           logEvent({
             evt: "webhook_received",
@@ -204,29 +240,83 @@ async function processWebhookPayload(
             wa_id: from,
           });
 
-          // Obtener perfil correspondiente a este remitente
-          const matchingContact =
-            val.contacts?.find((c) => c.wa_id === from) || val.contacts?.[0];
-          const rawProfileName = matchingContact?.profile?.name?.trim();
-          const profileName = rawProfileName && rawProfileName.length > 0 ? rawProfileName : null;
+          // Determinar si hay teléfono numérico y/o BSUID
+          const isDigitsOnly = (str?: string | null): boolean =>
+            Boolean(str && /^\+?\d{6,16}$/.test(str.replace(/[\s-]/g, "")));
 
-          // Identificar si es teléfono numérico o BSUID/username
-          const isNumeric = /^\d+$/.test(from);
-          const phone = isNumeric ? from : null;
-          const bsuid = !isNumeric
-            ? from
-            : (msg.user_id as string | undefined) ||
-              matchingContact?.user_id ||
-              null;
+          const isBsuidFormat = (str?: string | null): boolean =>
+            Boolean(str && (/^[A-Za-z]{2}\.[A-Za-z0-9_-]+$/.test(str) || (!/^\d+$/.test(str) && str.length > 0)));
+
+          const idCandidates = [rawFrom, rawUserId, contactWaId, contactUserId].filter(Boolean) as string[];
+
+          const phoneCandidate = idCandidates.find(isDigitsOnly) || null;
+          const bsuidCandidate = idCandidates.find(isBsuidFormat) || null;
+
+          let extractedPhone: string | null = null;
+          let extractedBsuid: string | null = null;
+          let stableWaId: string = from;
+
+          if (phoneCandidate && bsuidCandidate) {
+            extractedPhone = phoneCandidate;
+            extractedBsuid = bsuidCandidate;
+            stableWaId = from;
+          } else if (phoneCandidate) {
+            extractedPhone = phoneCandidate;
+            extractedBsuid = null;
+            stableWaId = phoneCandidate;
+          } else if (bsuidCandidate) {
+            extractedPhone = null;
+            extractedBsuid = bsuidCandidate;
+            stableWaId = bsuidCandidate;
+          } else {
+            stableWaId = from;
+            if (/^\d+$/.test(from)) {
+              extractedPhone = from;
+            } else {
+              extractedBsuid = from;
+            }
+          }
 
           let contactId: string;
           try {
-            // 1. Upsert seguro de contacto: preservar campos existentes
-            const { data: existingContact } = await supabase
-              .from("contacts")
-              .select("id, name, phone, bsuid")
-              .eq("wa_id", from)
-              .maybeSingle();
+            // Dual-key resolution: buscar contacto existente por cualquiera de sus identificadores
+            let existingContact: {
+              id: string;
+              wa_id: string;
+              phone: string | null;
+              bsuid: string | null;
+              name: string | null;
+            } | null = null;
+
+            if (extractedBsuid) {
+              const { data: byBsuid } = await supabase
+                .from("contacts")
+                .select("id, wa_id, phone, bsuid, name")
+                .or(`bsuid.eq.${extractedBsuid},wa_id.eq.${extractedBsuid}`)
+                .limit(1)
+                .maybeSingle();
+              if (byBsuid) existingContact = byBsuid;
+            }
+
+            if (!existingContact && extractedPhone) {
+              const { data: byPhone } = await supabase
+                .from("contacts")
+                .select("id, wa_id, phone, bsuid, name")
+                .or(`phone.eq.${extractedPhone},wa_id.eq.${extractedPhone}`)
+                .limit(1)
+                .maybeSingle();
+              if (byPhone) existingContact = byPhone;
+            }
+
+            if (!existingContact && stableWaId) {
+              const { data: byWaId } = await supabase
+                .from("contacts")
+                .select("id, wa_id, phone, bsuid, name")
+                .eq("wa_id", stableWaId)
+                .limit(1)
+                .maybeSingle();
+              if (byWaId) existingContact = byWaId;
+            }
 
             if (existingContact) {
               contactId = existingContact.id;
@@ -241,20 +331,26 @@ async function processWebhookPayload(
               if (profileName && !existingContact.name) {
                 updatePayload.name = profileName;
               }
-              if (phone && !existingContact.phone) {
-                updatePayload.phone = phone;
+              if (extractedPhone && !existingContact.phone) {
+                updatePayload.phone = extractedPhone;
               }
-              if (bsuid && !existingContact.bsuid) {
-                updatePayload.bsuid = bsuid;
+              if (extractedBsuid && !existingContact.bsuid) {
+                updatePayload.bsuid = extractedBsuid;
               }
-              await supabase.from("contacts").update(updatePayload).eq("id", contactId);
+              const { error: updateContactErr } = await supabase
+                .from("contacts")
+                .update(updatePayload)
+                .eq("id", contactId);
+
+              if (updateContactErr) throw updateContactErr;
             } else {
+              // Insertar nuevo contacto
               const { data: newContact, error: insertContactErr } = await supabase
                 .from("contacts")
                 .insert({
-                  wa_id: from,
-                  phone,
-                  bsuid,
+                  wa_id: stableWaId,
+                  phone: extractedPhone,
+                  bsuid: extractedBsuid,
                   name: profileName,
                   updated_at: new Date().toISOString(),
                 })
@@ -262,12 +358,35 @@ async function processWebhookPayload(
                 .maybeSingle();
 
               if (insertContactErr || !newContact) {
-                // Posible carrera concurrente: buscar contacto creado en paralelo
-                const { data: parallelContact } = await supabase
-                  .from("contacts")
-                  .select("id")
-                  .eq("wa_id", from)
-                  .maybeSingle();
+                // Manejo de concurrencia o clave duplicada
+                let parallelContact: { id: string } | null = null;
+                if (extractedBsuid) {
+                  const { data } = await supabase
+                    .from("contacts")
+                    .select("id")
+                    .or(`bsuid.eq.${extractedBsuid},wa_id.eq.${extractedBsuid}`)
+                    .limit(1)
+                    .maybeSingle();
+                  if (data) parallelContact = data;
+                }
+                if (!parallelContact && extractedPhone) {
+                  const { data } = await supabase
+                    .from("contacts")
+                    .select("id")
+                    .or(`phone.eq.${extractedPhone},wa_id.eq.${extractedPhone}`)
+                    .limit(1)
+                    .maybeSingle();
+                  if (data) parallelContact = data;
+                }
+                if (!parallelContact && stableWaId) {
+                  const { data } = await supabase
+                    .from("contacts")
+                    .select("id")
+                    .eq("wa_id", stableWaId)
+                    .limit(1)
+                    .maybeSingle();
+                  if (data) parallelContact = data;
+                }
 
                 if (!parallelContact) {
                   throw insertContactErr || new Error("Failed to insert contact");
@@ -281,7 +400,7 @@ async function processWebhookPayload(
             logError({
               step: "contact_upsert",
               wamid,
-              error: cErr instanceof Error ? cErr.message : String(cErr),
+              error: cErr,
             });
             continue;
           }
@@ -339,7 +458,7 @@ async function processWebhookPayload(
             logError({
               step: "conversation_upsert",
               wamid,
-              error: convErr instanceof Error ? convErr.message : String(convErr),
+              error: convErr,
             });
             continue;
           }
@@ -385,7 +504,7 @@ async function processWebhookPayload(
               step: "lead_event",
               wamid,
               conversation_id: conversationId,
-              error: leadErr instanceof Error ? leadErr.message : String(leadErr),
+              error: leadErr,
             });
           }
 
@@ -421,7 +540,7 @@ async function processWebhookPayload(
                   step: "audio_transcription",
                   wamid,
                   conversation_id: conversationId,
-                  error: audioErr instanceof Error ? audioErr.message : String(audioErr),
+                  error: audioErr,
                 });
               }
             }
@@ -444,7 +563,7 @@ async function processWebhookPayload(
                   step: "image_download",
                   wamid,
                   conversation_id: conversationId,
-                  error: imgErr instanceof Error ? imgErr.message : String(imgErr),
+                  error: imgErr,
                 });
               }
             }
@@ -494,7 +613,7 @@ async function processWebhookPayload(
               step: "message_insert",
               wamid,
               conversation_id: conversationId,
-              error: mErr instanceof Error ? mErr.message : String(mErr),
+              error: mErr,
             });
             continue;
           }
@@ -518,7 +637,10 @@ async function processWebhookPayload(
           Array.from(conversationsToProcess.entries()).map(
             async ([conversationId, { contactId, from, latestInsertedCreatedAt }]) => {
               // Debounce estricto por conversation_id
-              const debounceMs = from.startsWith("TEST-") ? 150 : (config.MESSAGE_DEBOUNCE_MS || 3000);
+              const debounceMs =
+                from.startsWith("TEST-") || process.env.NODE_ENV === "test"
+                  ? 150
+                  : config.MESSAGE_DEBOUNCE_MS || 3000;
               await new Promise((resolve) => setTimeout(resolve, debounceMs));
 
               // Verificar si llegó un mensaje entrante más reciente en esta conversación
@@ -605,7 +727,7 @@ async function processWebhookPayload(
                     logError({
                       step: "agent_runner",
                       conversation_id: conversationId,
-                      error: agentErr instanceof Error ? agentErr.message : String(agentErr),
+                      error: agentErr,
                     });
                     replyText =
                       "Hola, en este momento experimentamos una alta demanda técnica. Ya registré tu solicitud y un asesor de nuestro equipo te atenderá a la brevedad.";
@@ -619,7 +741,7 @@ async function processWebhookPayload(
                     logError({
                       step: "whatsapp_send",
                       conversation_id: conversationId,
-                      error: sendErr instanceof Error ? sendErr.message : String(sendErr),
+                      error: sendErr,
                     });
                   }
 

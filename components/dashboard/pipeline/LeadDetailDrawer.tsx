@@ -158,7 +158,7 @@ export function LeadDetailDrawer({
               Detalle del Lead
             </h2>
             <p className="text-[12px] text-[#525252]">
-              {lead.contact.wa_id}
+              {lead.contact.phone || (lead.contact.name ? `Usuario de WhatsApp (${lead.contact.name})` : "Usuario de WhatsApp")}
             </p>
           </div>
           <div className="flex items-center gap-2">

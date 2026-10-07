@@ -13,6 +13,7 @@ export interface ContactDetailsData {
   id: string;
   wa_id: string;
   phone: string | null;
+  bsuid?: string | null;
   name: string | null;
   email: string | null;
   company: string | null;
@@ -175,7 +176,14 @@ export function ContactDetails({
           </label>
           <input
             type="text"
-            value={contact.phone || contact.wa_id}
+            value={
+              contact.phone
+                ? contact.phone
+                : contact.name
+                ? `Usuario de WhatsApp (${contact.name})`
+                : "Usuario de WhatsApp"
+            }
+            title={contact.bsuid || contact.wa_id}
             disabled
             className="w-full h-8 px-2 text-[12px] bg-[#FAFAFA] border border-[#E5E5E5] rounded-[6px] text-[#525252]"
           />

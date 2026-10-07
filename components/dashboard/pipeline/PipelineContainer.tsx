@@ -66,6 +66,8 @@ export function PipelineContainer({
         contact:contacts (
           id,
           wa_id,
+          phone,
+          bsuid,
           name,
           email,
           company
@@ -157,13 +159,27 @@ export function PipelineContainer({
   // Filtrado de leads
   const filteredLeads = useMemo(() => {
     return leads.filter((lead) => {
-      // Búsqueda por nombre o teléfono
+      // Búsqueda por nombre, teléfono, BSUID o usuario de whatsapp
       if (search.trim()) {
         const query = search.toLowerCase();
         const nameMatch = lead.contact.name?.toLowerCase().includes(query);
-        const phoneMatch = lead.contact.wa_id.includes(query);
+        const phoneMatch =
+          lead.contact.phone?.toLowerCase().includes(query) ||
+          lead.contact.wa_id.toLowerCase().includes(query);
+        const bsuidMatch = lead.contact.bsuid?.toLowerCase().includes(query);
+        const isBsuidOnly =
+          !lead.contact.phone || /^[A-Za-z]{2}\.[A-Za-z0-9]+$/.test(lead.contact.wa_id);
+        const whatsappUserMatch = isBsuidOnly && "usuario de whatsapp".includes(query);
         const companyMatch = lead.contact.company?.toLowerCase().includes(query);
-        if (!nameMatch && !phoneMatch && !companyMatch) return false;
+        if (
+          !nameMatch &&
+          !phoneMatch &&
+          !bsuidMatch &&
+          !whatsappUserMatch &&
+          !companyMatch
+        ) {
+          return false;
+        }
       }
 
       // Filtro por servicio

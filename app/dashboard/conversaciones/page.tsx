@@ -23,6 +23,7 @@ export default async function ConversacionesPage() {
         id,
         wa_id,
         phone,
+        bsuid,
         name,
         email,
         company

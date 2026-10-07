@@ -34,6 +34,8 @@ export default async function PipelinePage() {
       contact:contacts (
         id,
         wa_id,
+        phone,
+        bsuid,
         name,
         email,
         company

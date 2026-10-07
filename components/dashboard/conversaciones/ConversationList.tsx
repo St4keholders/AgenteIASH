@@ -16,6 +16,7 @@ export interface ConversationItem {
     id: string;
     wa_id: string;
     phone: string | null;
+    bsuid?: string | null;
     name: string | null;
     email: string | null;
     company: string | null;
@@ -58,9 +59,20 @@ export function ConversationList({
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
         const name = (c.contact?.name || "").toLowerCase();
-        const phone = (c.contact?.phone || c.contact?.wa_id || "").toLowerCase();
+        const phone = (c.contact?.phone || "").toLowerCase();
+        const bsuid = (c.contact?.bsuid || "").toLowerCase();
+        const waId = (c.contact?.wa_id || "").toLowerCase();
+        const isBsuidOnly = !c.contact?.phone;
+        const bsuidLabel = isBsuidOnly ? "usuario de whatsapp" : "";
         const lastMsg = (c.last_message?.body || c.last_message?.transcript || "").toLowerCase();
-        return name.includes(q) || phone.includes(q) || lastMsg.includes(q);
+        return (
+          name.includes(q) ||
+          phone.includes(q) ||
+          bsuid.includes(q) ||
+          waId.includes(q) ||
+          bsuidLabel.includes(q) ||
+          lastMsg.includes(q)
+        );
       }
 
       return true;
@@ -112,7 +124,12 @@ export function ConversationList({
         ) : (
           filtered.map((c) => {
             const isSelected = c.id === selectedId;
-            const displayName = c.contact?.name || c.contact?.phone || c.contact?.wa_id;
+            const isBsuidOnly =
+              !c.contact?.phone &&
+              Boolean(c.contact?.bsuid || (c.contact?.wa_id && !/^\+?\d+$/.test(c.contact.wa_id)));
+            const displayName =
+              c.contact?.name ||
+              (isBsuidOnly ? "Usuario de WhatsApp" : (c.contact?.phone || c.contact?.wa_id));
             const lastMsgText =
               c.last_message?.transcript ||
               c.last_message?.body ||

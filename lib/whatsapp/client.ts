@@ -168,32 +168,41 @@ export async function sendWhatsAppTemplate(
 
   const url = `https://graph.facebook.com/${config.GRAPH_API_VERSION}/${config.WHATSAPP_PHONE_NUMBER_ID}/messages`;
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.WHATSAPP_TOKEN}`,
-      "Content-Type": "application/json",
+  return await withExponentialBackoff(
+    async () => {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${config.WHATSAPP_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          recipient_type: "individual",
+          to,
+          type: "template",
+          template: {
+            name: templateName,
+            language: { code: languageCode },
+            components,
+          },
+        }),
+      });
+
+      if (!response.ok) {
+        const errorBody = await response.text();
+        const err = new Error(
+          `Error sending WhatsApp template (${response.status}): ${errorBody}`
+        ) as Error & { status: number };
+        err.status = response.status;
+        throw err;
+      }
+
+      const data = (await response.json()) as WhatsAppSendMessageResponse;
+      return { messageId: data.messages[0].id };
     },
-    body: JSON.stringify({
-      messaging_product: "whatsapp",
-      recipient_type: "individual",
-      to,
-      type: "template",
-      template: {
-        name: templateName,
-        language: { code: languageCode },
-        components,
-      },
-    }),
-  });
-
-  if (!response.ok) {
-    const errorBody = await response.text();
-    throw new Error(`Error sending WhatsApp template (${response.status}): ${errorBody}`);
-  }
-
-  const data = (await response.json()) as WhatsAppSendMessageResponse;
-  return { messageId: data.messages[0].id };
+    { maxRetries: 3, baseDelayMs: 500 }
+  );
 }
 
 /**
