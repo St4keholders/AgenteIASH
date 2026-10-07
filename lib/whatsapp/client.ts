@@ -1,4 +1,5 @@
 import { getConfig } from "@/lib/config";
+import { withExponentialBackoff } from "@/lib/utils/retry";
 
 export interface WhatsAppSendMessageResponse {
   messaging_product: "whatsapp";
@@ -18,6 +19,7 @@ export interface WhatsAppTemplate {
 /**
  * Envía un mensaje de texto simple a través de WhatsApp Cloud API.
  * Si WHATSAPP_DRY_RUN es true, no hace petición a Meta y genera un wamid simulado.
+ * Implementa reintentos automáticos con backoff exponencial y jitter ante 429 o 5xx.
  */
 export async function sendWhatsAppText(
   to: string,
@@ -32,31 +34,40 @@ export async function sendWhatsAppText(
 
   const url = `https://graph.facebook.com/${config.GRAPH_API_VERSION}/${config.WHATSAPP_PHONE_NUMBER_ID}/messages`;
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.WHATSAPP_TOKEN}`,
-      "Content-Type": "application/json",
+  return await withExponentialBackoff(
+    async () => {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${config.WHATSAPP_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          recipient_type: "individual",
+          to,
+          type: "text",
+          text: {
+            preview_url: false,
+            body: text,
+          },
+        }),
+      });
+
+      if (!response.ok) {
+        const errorBody = await response.text();
+        const err = new Error(
+          `Error sending WhatsApp message (${response.status}): ${errorBody}`
+        ) as Error & { status: number };
+        err.status = response.status;
+        throw err;
+      }
+
+      const data = (await response.json()) as WhatsAppSendMessageResponse;
+      return { messageId: data.messages[0].id };
     },
-    body: JSON.stringify({
-      messaging_product: "whatsapp",
-      recipient_type: "individual",
-      to,
-      type: "text",
-      text: {
-        preview_url: false,
-        body: text,
-      },
-    }),
-  });
-
-  if (!response.ok) {
-    const errorBody = await response.text();
-    throw new Error(`Error sending WhatsApp message (${response.status}): ${errorBody}`);
-  }
-
-  const data = (await response.json()) as WhatsAppSendMessageResponse;
-  return { messageId: data.messages[0].id };
+    { maxRetries: 3, baseDelayMs: 500 }
+  );
 }
 
 /**

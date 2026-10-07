@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
 import {
   ConversationList,
@@ -35,8 +35,13 @@ export function ConversationsContainer({
   >("todas");
 
   const selectedConv = conversations.find((c) => c.id === selectedId);
+  const selectedIdRef = useRef<string | null>(selectedId);
 
-  // Cargar mensajes, lead y citas de la conversación seleccionada
+  useEffect(() => {
+    selectedIdRef.current = selectedId;
+  }, [selectedId]);
+
+  // Cargar mensajes, lead y citas de la conversación seleccionada bajo demanda
   const reloadCurrentConversation = useCallback(async (convId: string) => {
     const supabase = createClient();
     const { data: msgs } = await supabase
@@ -49,13 +54,25 @@ export function ConversationsContainer({
       setMessages(msgs as MessageItem[]);
     }
 
-    const conv = conversations.find((c) => c.id === convId);
-    if (conv?.contact_id) {
-      const { data: leadData } = await supabase
-        .from("leads")
-        .select("id, service_interest, temperature, invoices_per_month, suggested_plan, summary, pipeline_stages(name)")
-        .eq("contact_id", conv.contact_id)
-        .maybeSingle();
+    const { data: convData } = await supabase
+      .from("conversations")
+      .select("contact_id")
+      .eq("id", convId)
+      .maybeSingle();
+
+    if (convData?.contact_id) {
+      const [{ data: leadData }, { data: appData }] = await Promise.all([
+        supabase
+          .from("leads")
+          .select("id, service_interest, temperature, invoices_per_month, suggested_plan, summary, pipeline_stages(name)")
+          .eq("contact_id", convData.contact_id)
+          .maybeSingle(),
+        supabase
+          .from("appointments")
+          .select("id, service, start_at, modality, meet_link, status")
+          .eq("contact_id", convData.contact_id)
+          .order("start_at", { ascending: false }),
+      ]);
 
       if (leadData) {
         setLead({
@@ -67,24 +84,22 @@ export function ConversationsContainer({
           suggested_plan: leadData.suggested_plan,
           summary: leadData.summary,
         });
+      } else {
+        setLead(null);
       }
-
-      const { data: appData } = await supabase
-        .from("appointments")
-        .select("id, service, start_at, modality, meet_link, status")
-        .eq("contact_id", conv.contact_id)
-        .order("start_at", { ascending: false });
 
       if (appData) {
         setAppointments(appData as AppointmentDetailsData[]);
       }
     }
-  }, [conversations]);
+  }, []);
 
-  // Al cambiar la conversación seleccionada
+  // Al cambiar la conversación seleccionada: solo lectura, sin Server Actions
   useEffect(() => {
     let isCancelled = false;
-    if (!selectedId) return;
+    if (!selectedId) {
+      return;
+    }
 
     async function fetchOnSelect(convId: string) {
       const supabase = createClient();
@@ -99,18 +114,26 @@ export function ConversationsContainer({
         setMessages(msgs as MessageItem[]);
       }
 
-      void markConversationReadAction(convId);
-      setConversations((prev) =>
-        prev.map((c) => (c.id === convId ? { ...c, unread_count: 0 } : c))
-      );
+      const { data: convData } = await supabase
+        .from("conversations")
+        .select("contact_id")
+        .eq("id", convId)
+        .maybeSingle();
 
-      const conv = conversations.find((c) => c.id === convId);
-      if (conv?.contact_id) {
-        const { data: leadData } = await supabase
-          .from("leads")
-          .select("id, service_interest, temperature, invoices_per_month, suggested_plan, summary, pipeline_stages(name)")
-          .eq("contact_id", conv.contact_id)
-          .maybeSingle();
+      if (isCancelled) return;
+      if (convData?.contact_id) {
+        const [{ data: leadData }, { data: appData }] = await Promise.all([
+          supabase
+            .from("leads")
+            .select("id, service_interest, temperature, invoices_per_month, suggested_plan, summary, pipeline_stages(name)")
+            .eq("contact_id", convData.contact_id)
+            .maybeSingle(),
+          supabase
+            .from("appointments")
+            .select("id, service, start_at, modality, meet_link, status")
+            .eq("contact_id", convData.contact_id)
+            .order("start_at", { ascending: false }),
+        ]);
 
         if (isCancelled) return;
         if (leadData) {
@@ -127,16 +150,12 @@ export function ConversationsContainer({
           setLead(null);
         }
 
-        const { data: appData } = await supabase
-          .from("appointments")
-          .select("id, service, start_at, modality, meet_link, status")
-          .eq("contact_id", conv.contact_id)
-          .order("start_at", { ascending: false });
-
-        if (isCancelled) return;
         if (appData) {
           setAppointments(appData as AppointmentDetailsData[]);
         }
+      } else {
+        setLead(null);
+        setAppointments([]);
       }
     }
 
@@ -145,9 +164,22 @@ export function ConversationsContainer({
     return () => {
       isCancelled = true;
     };
-  }, [selectedId, conversations]);
+  }, [selectedId]);
 
-  // Suscripción Realtime a mensajes y conversaciones
+  // Selección manual por el usuario: marca como leído solo si tiene unread_count > 0
+  const handleSelectConversation = useCallback((convId: string) => {
+    setSelectedId(convId);
+    setConversations((prev) => {
+      const target = prev.find((c) => c.id === convId);
+      if (target && (target.unread_count || 0) > 0) {
+        void markConversationReadAction(convId);
+        return prev.map((c) => (c.id === convId ? { ...c, unread_count: 0 } : c));
+      }
+      return prev;
+    });
+  }, []);
+
+  // Suscripción Realtime creada UNA sola vez y limpiada al desmontar
   useEffect(() => {
     const supabase = createClient();
 
@@ -159,8 +191,8 @@ export function ConversationsContainer({
         (payload) => {
           const newMsg = payload.new as MessageItem;
 
-          // Si es de la conversación seleccionada, agregar al hilo
-          if (newMsg.conversation_id === selectedId) {
+          // Si es de la conversación activa en pantalla, agregar al hilo
+          if (newMsg.conversation_id === selectedIdRef.current) {
             setMessages((prev) => {
               if (prev.some((m) => m.id === newMsg.id)) return prev;
               return [...prev, newMsg];
@@ -181,7 +213,7 @@ export function ConversationsContainer({
               created_at: newMsg.created_at,
             };
 
-            if (newMsg.conversation_id !== selectedId && newMsg.direction === "in") {
+            if (newMsg.conversation_id !== selectedIdRef.current && newMsg.direction === "in") {
               target.unread_count = (target.unread_count || 0) + 1;
             }
 
@@ -208,7 +240,7 @@ export function ConversationsContainer({
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [selectedId]);
+  }, []);
 
   return (
     <div className="flex-1 flex h-[calc(100vh-56px)] overflow-hidden bg-white">
@@ -216,7 +248,7 @@ export function ConversationsContainer({
       <ConversationList
         conversations={conversations}
         selectedId={selectedId}
-        onSelect={setSelectedId}
+        onSelect={handleSelectConversation}
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
         filter={filter}

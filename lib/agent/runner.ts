@@ -3,6 +3,7 @@ import { getConfig } from "@/lib/config";
 import { createAdminClient } from "@/lib/supabase/server";
 import { getPublishedConfig, buildSystemPrompt, AgentConfigData } from "@/lib/agent/prompt";
 import { AGENT_TOOLS_DEFINITIONS, executeAgentTool } from "@/lib/agent/tools";
+import { withExponentialBackoff } from "@/lib/utils/retry";
 import type {
   ChatCompletionMessageParam,
   ChatCompletionToolMessageParam,
@@ -18,11 +19,54 @@ export interface AgentRunResult {
   error?: string;
 }
 
+let mockCallCounter = 0;
+async function mockChatCompletion(): Promise<OpenAI.Chat.Completions.ChatCompletion> {
+  mockCallCounter++;
+  // Latencia aleatoria de 1 a 4 s (1000 a 4000 ms)
+  const delayMs = Math.floor(1000 + Math.random() * 3000);
+  await new Promise((resolve) => setTimeout(resolve, delayMs));
+
+  // Algunos 429 forzados (~14% de las llamadas iniciales para ejercitar backoff)
+  if (mockCallCounter % 7 === 0) {
+    const rateLimitError = Object.assign(
+      new Error("Rate limit 429 reached (mocked OpenAI error)"),
+      { status: 429, statusCode: 429 }
+    );
+    throw rateLimitError;
+  }
+
+  return {
+    id: `chatcmpl-mock-${Date.now()}`,
+    created: Math.floor(Date.now() / 1000),
+    model: "gpt-4o-mini",
+    object: "chat.completion",
+    choices: [
+      {
+        index: 0,
+        finish_reason: "stop",
+        logprobs: null,
+        message: {
+          role: "assistant",
+          content:
+            "Hola, un gusto saludarte. Soy el asesor virtual de Stakeholders Contadores Públicos. ¿En qué podemos orientarte el día de hoy?",
+          refusal: null,
+        },
+      },
+    ],
+    usage: {
+      prompt_tokens: 150,
+      completion_tokens: 35,
+      total_tokens: 185,
+    },
+  };
+}
+
 export async function runAgentConversation(
   conversationId: string,
   contactId: string,
   now = new Date(),
-  customConfig?: AgentConfigData // for Phase 04 draft testing
+  customConfig?: AgentConfigData, // for Phase 04 draft testing
+  options?: { mockOpenAI?: boolean }
 ): Promise<AgentRunResult> {
   const startTime = Date.now();
   const config = getConfig();
@@ -82,17 +126,27 @@ export async function runAgentConversation(
   let loopCount = 0;
   const maxLoops = 5;
 
+  const useMock = options?.mockOpenAI ?? (process.env.MOCK_OPENAI === "true");
+
   try {
     while (loopCount < maxLoops) {
       loopCount++;
 
-      const completion = await openai.chat.completions.create({
-        model: config.OPENAI_MODEL,
-        messages,
-        tools: AGENT_TOOLS_DEFINITIONS,
-        tool_choice: "auto",
-        temperature: 0.2,
-      });
+      const completion = await withExponentialBackoff<OpenAI.Chat.Completions.ChatCompletion>(
+        () => {
+          if (useMock) {
+            return mockChatCompletion();
+          }
+          return openai.chat.completions.create({
+            model: config.OPENAI_MODEL,
+            messages,
+            tools: AGENT_TOOLS_DEFINITIONS,
+            tool_choice: "auto",
+            temperature: 0.2,
+          });
+        },
+        { maxRetries: 3, baseDelayMs: 600 }
+      );
 
       if (completion.usage) {
         totalTokensIn += completion.usage.prompt_tokens || 0;
@@ -233,13 +287,17 @@ export async function runAgentSimulation(
     while (loopCount < maxLoops) {
       loopCount++;
 
-      const completion = await openai.chat.completions.create({
-        model: config.OPENAI_MODEL,
-        messages,
-        tools: AGENT_TOOLS_DEFINITIONS,
-        tool_choice: "auto",
-        temperature: 0.2,
-      });
+      const completion = await withExponentialBackoff(
+        () =>
+          openai.chat.completions.create({
+            model: config.OPENAI_MODEL,
+            messages,
+            tools: AGENT_TOOLS_DEFINITIONS,
+            tool_choice: "auto",
+            temperature: 0.2,
+          }),
+        { maxRetries: 3, baseDelayMs: 600 }
+      );
 
       if (completion.usage) {
         totalTokensIn += completion.usage.prompt_tokens || 0;

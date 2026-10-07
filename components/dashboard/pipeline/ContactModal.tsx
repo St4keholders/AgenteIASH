@@ -29,20 +29,22 @@ export function ContactModal({ lead, isOpen, onClose, onSuccess }: ContactModalP
   const [templates, setTemplates] = useState<WhatsAppTemplate[]>([]);
   const [selectedTemplate, setSelectedTemplate] = useState<WhatsAppTemplate | null>(null);
   const [variables, setVariables] = useState<string[]>([]);
-
-  // Determinar si la ventana de 24h está abierta (en estado)
-  const [is24hOpen] = useState(() => {
-    const lastInbound = lead?.conversation?.last_inbound_at;
-    if (!lastInbound) return false;
-    const diff = new Date().getTime() - new Date(lastInbound).getTime();
-    return diff < 24 * 60 * 60 * 1000;
-  });
+  const [is24hOpen, setIs24hOpen] = useState(false);
 
   useEffect(() => {
     if (!isOpen || !lead) return;
 
-    if (!is24hOpen) {
-      getTemplatesAction().then((tpls) => {
+    const lastInbound = lead.conversation?.last_inbound_at;
+    const open = lastInbound
+      ? Date.now() - new Date(lastInbound).getTime() < 24 * 60 * 60 * 1000
+      : false;
+
+    void Promise.resolve().then(() => {
+      setIs24hOpen(open);
+    });
+
+    if (!open) {
+      void getTemplatesAction().then((tpls) => {
         setTemplates(tpls);
         if (tpls.length > 0) {
           setSelectedTemplate(tpls[0]);
@@ -50,7 +52,7 @@ export function ContactModal({ lead, isOpen, onClose, onSuccess }: ContactModalP
         }
       });
     }
-  }, [isOpen, lead, is24hOpen]);
+  }, [isOpen, lead]);
 
   if (!isOpen || !lead) return null;
 

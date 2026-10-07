@@ -14,6 +14,7 @@ import {
   restoreAgentVersionAction,
   getAgentVersionHistoryAction,
 } from "@/app/dashboard/actions";
+import { isColombiaHoliday } from "@/lib/calendar/colombia-holidays";
 
 describe("Agent Brain Editor & Configuration (Phase 04)", () => {
   const supabase = createAdminClient();
@@ -129,10 +130,20 @@ describe("Agent Brain Editor & Configuration (Phase 04)", () => {
       },
     };
 
-    // Miércoles 7 de octubre de 2026 (día laboral ordinario)
+    // Próximo día laboral futuro para asegurar slots vigentes
+    const futureDate = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000);
+    while (
+      futureDate.getDay() === 0 ||
+      futureDate.getDay() === 6 ||
+      isColombiaHoliday(futureDate.toISOString().split("T")[0])
+    ) {
+      futureDate.setDate(futureDate.getDate() + 1);
+    }
+    const futureDateStr = futureDate.toISOString().split("T")[0];
+
     const result = (await executeAgentTool(
       "check_availability",
-      { date: "2026-10-07" },
+      { date: futureDateStr },
       {
         contactId: "TEST-sim-contact",
         conversationId: "TEST-sim-conv",

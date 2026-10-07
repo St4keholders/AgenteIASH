@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "check:env": "node scripts/check-env.js",
-    "check:design": "node scripts/check-design.js"
+    "check:design": "node scripts/check-design.js",
+    "load:test": "npx tsx scripts/load-test.ts"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

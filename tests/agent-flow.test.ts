@@ -1,6 +1,7 @@
 import { describe, it, expect, afterAll, beforeAll } from "vitest";
 import { createAdminClient } from "@/lib/supabase/server";
 import { executeAgentTool, ToolExecutionContext } from "@/lib/agent/tools";
+import { isColombiaHoliday } from "@/lib/calendar/colombia-holidays";
 
 interface AvailabilityResult {
   available: boolean;
@@ -79,11 +80,24 @@ describe("Agent Tool Calling Flow (check -> book -> reschedule -> cancel)", () =
     }
   });
 
+  // Calcular un día laboral futuro que no sea fin de semana ni festivo
+  const targetDate = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  while (
+    targetDate.getDay() === 0 ||
+    targetDate.getDay() === 6 ||
+    isColombiaHoliday(targetDate.toISOString().split("T")[0])
+  ) {
+    targetDate.setDate(targetDate.getDate() + 1);
+  }
+  const dateStr = targetDate.toISOString().split("T")[0];
+  const startIso = `${dateStr}T10:00:00-05:00`;
+  const rescheduleIso = `${dateStr}T14:30:00-05:00`;
+
   it("1. check_availability returns free slots for a valid business day", async () => {
     const context: ToolExecutionContext = { contactId, conversationId, supabase };
     const result = (await executeAgentTool(
       "check_availability",
-      { date: "2026-10-07" },
+      { date: dateStr },
       context
     )) as unknown as AvailabilityResult;
 
@@ -101,7 +115,7 @@ describe("Agent Tool Calling Flow (check -> book -> reschedule -> cancel)", () =
         email: "usuario.test@example.com",
         modality: "virtual",
         service: "Contabilidad para empresas",
-        start_iso: "2026-10-07T10:00:00-05:00",
+        start_iso: startIso,
       },
       context
     )) as unknown as BookingResult;
@@ -137,7 +151,7 @@ describe("Agent Tool Calling Flow (check -> book -> reschedule -> cancel)", () =
       "reschedule_appointment",
       {
         appointment_id: createdAppointmentId,
-        new_start_iso: "2026-10-07T14:30:00-05:00",
+        new_start_iso: rescheduleIso,
       },
       context
     )) as unknown as GenericSuccessResult;
@@ -151,7 +165,7 @@ describe("Agent Tool Calling Flow (check -> book -> reschedule -> cancel)", () =
       .single();
 
     expect(app?.status).toBe("rescheduled");
-    expect(new Date(app!.start_at).toISOString()).toContain("2026-10-07");
+    expect(new Date(app!.start_at).toISOString()).toContain(dateStr);
   });
 
   it("4. cancel_appointment cancels appointment and moves lead back to 'Calificado'", async () => {
