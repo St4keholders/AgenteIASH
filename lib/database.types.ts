@@ -167,7 +167,8 @@ export type Database = {
           name: string | null
           phone: string | null
           updated_at: string
-          wa_id: string
+          username: string | null
+          wa_id: string | null
         }
         Insert: {
           bsuid?: string | null
@@ -178,7 +179,8 @@ export type Database = {
           name?: string | null
           phone?: string | null
           updated_at?: string
-          wa_id: string
+          username?: string | null
+          wa_id?: string | null
         }
         Update: {
           bsuid?: string | null
@@ -189,7 +191,8 @@ export type Database = {
           name?: string | null
           phone?: string | null
           updated_at?: string
-          wa_id?: string
+          username?: string | null
+          wa_id?: string | null
         }
         Relationships: []
       }
@@ -201,9 +204,11 @@ export type Database = {
           id: string
           last_inbound_at: string | null
           last_message_at: string | null
+          last_processed_inbound_at: string | null
           needs_human: boolean
           processing_lock_until: string | null
           status: string
+          summary: string | null
           unread_count: number
         }
         Insert: {
@@ -213,9 +218,11 @@ export type Database = {
           id?: string
           last_inbound_at?: string | null
           last_message_at?: string | null
+          last_processed_inbound_at?: string | null
           needs_human?: boolean
           processing_lock_until?: string | null
           status?: string
+          summary?: string | null
           unread_count?: number
         }
         Update: {
@@ -225,16 +232,18 @@ export type Database = {
           id?: string
           last_inbound_at?: string | null
           last_message_at?: string | null
+          last_processed_inbound_at?: string | null
           needs_human?: boolean
           processing_lock_until?: string | null
           status?: string
+          summary?: string | null
           unread_count?: number
         }
         Relationships: [
           {
             foreignKeyName: "conversations_contact_id_fkey"
             columns: ["contact_id"]
-            isOneToOne: false
+            isOneToOne: true
             referencedRelation: "contacts"
             referencedColumns: ["id"]
           },
@@ -362,6 +371,7 @@ export type Database = {
           id: string
           media_id: string | null
           raw: Json | null
+          received_at: string
           sender: string
           status: string
           storage_path: string | null
@@ -378,6 +388,7 @@ export type Database = {
           id?: string
           media_id?: string | null
           raw?: Json | null
+          received_at?: string
           sender: string
           status?: string
           storage_path?: string | null
@@ -394,6 +405,7 @@ export type Database = {
           id?: string
           media_id?: string | null
           raw?: Json | null
+          received_at?: string
           sender?: string
           status?: string
           storage_path?: string | null
@@ -462,10 +474,34 @@ export type Database = {
         Args: { p_conversation_id: string; p_lock_duration_seconds: number }
         Returns: boolean
       }
+      ingest_inbound_message: {
+        Args: {
+          p_body?: string | null
+          p_bsuid?: string | null
+          p_media_id?: string | null
+          p_name?: string | null
+          p_phone?: string | null
+          p_raw?: Json
+          p_sent_at?: string
+          p_type?: string
+          p_username?: string | null
+          p_wamid: string
+        }
+        Returns: {
+          contact_id: string
+          conversation_id: string
+          is_new_message: boolean
+        }[]
+      }
+      merge_contacts: {
+        Args: { p_primary_contact_id: string; p_secondary_contact_id: string }
+        Returns: string
+      }
       release_conversation_lock: {
         Args: { p_conversation_id: string }
         Returns: undefined
       }
+      test_fn: { Args: never; Returns: number }
     }
     Enums: {
       [_ in never]: never

@@ -2,6 +2,7 @@
 
 import { useMemo } from "react";
 import { formatTimeBogota } from "@/lib/calendar/availability";
+import { formatContactDisplayName } from "@/lib/contacts/format";
 
 export interface ConversationItem {
   id: string;
@@ -17,6 +18,7 @@ export interface ConversationItem {
     wa_id: string;
     phone: string | null;
     bsuid?: string | null;
+    username?: string | null;
     name: string | null;
     email: string | null;
     company: string | null;
@@ -60,17 +62,16 @@ export function ConversationList({
         const q = searchQuery.toLowerCase();
         const name = (c.contact?.name || "").toLowerCase();
         const phone = (c.contact?.phone || "").toLowerCase();
+        const username = (c.contact?.username || "").toLowerCase();
         const bsuid = (c.contact?.bsuid || "").toLowerCase();
         const waId = (c.contact?.wa_id || "").toLowerCase();
-        const isBsuidOnly = !c.contact?.phone;
-        const bsuidLabel = isBsuidOnly ? "usuario de whatsapp" : "";
         const lastMsg = (c.last_message?.body || c.last_message?.transcript || "").toLowerCase();
         return (
           name.includes(q) ||
           phone.includes(q) ||
+          username.includes(q) ||
           bsuid.includes(q) ||
           waId.includes(q) ||
-          bsuidLabel.includes(q) ||
           lastMsg.includes(q)
         );
       }
@@ -124,12 +125,7 @@ export function ConversationList({
         ) : (
           filtered.map((c) => {
             const isSelected = c.id === selectedId;
-            const isBsuidOnly =
-              !c.contact?.phone &&
-              Boolean(c.contact?.bsuid || (c.contact?.wa_id && !/^\+?\d+$/.test(c.contact.wa_id)));
-            const displayName =
-              c.contact?.name ||
-              (isBsuidOnly ? "Usuario de WhatsApp" : (c.contact?.phone || c.contact?.wa_id));
+            const displayName = formatContactDisplayName(c.contact);
             const lastMsgText =
               c.last_message?.transcript ||
               c.last_message?.body ||

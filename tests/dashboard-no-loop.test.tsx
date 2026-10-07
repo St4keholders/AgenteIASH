@@ -148,7 +148,7 @@ describe("Dashboard No Infinite Loop Verification", () => {
     expect(markConversationReadSpy).toHaveBeenCalledTimes(0);
 
     // User clicks the unread conversation
-    const unreadItem = getByText("Unread Contact");
+    const unreadItem = getByText(/Unread Contact/);
     await act(async () => {
       fireEvent.click(unreadItem);
     });

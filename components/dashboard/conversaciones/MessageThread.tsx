@@ -22,7 +22,7 @@ export interface MessageItem {
 interface MessageThreadProps {
   conversationId: string;
   contactName: string;
-  contactPhone: string;
+  contactSubtitle?: string;
   lastInboundAt: string | null;
   messages: MessageItem[];
   onMessageSent?: () => void;
@@ -31,7 +31,7 @@ interface MessageThreadProps {
 export function MessageThread({
   conversationId,
   contactName,
-  contactPhone,
+  contactSubtitle,
   lastInboundAt,
   messages,
   onMessageSent,
@@ -65,7 +65,6 @@ export function MessageThread({
     try {
       const res = await sendManualMessageAction(
         conversationId,
-        contactPhone,
         inputText.trim()
       );
       if (res?.success) {
@@ -87,9 +86,11 @@ export function MessageThread({
       <div className="h-14 px-5 border-b border-[#E5E5E5] flex items-center justify-between bg-white shrink-0">
         <div>
           <h2 className="text-[14px] font-semibold text-[#0A0A0A]">
-            {contactName || contactPhone}
+            {contactName || "Contacto"}
           </h2>
-          <p className="text-[12px] text-[#525252]">{contactPhone}</p>
+          {contactSubtitle && (
+            <p className="text-[12px] text-[#525252]">{contactSubtitle}</p>
+          )}
         </div>
 
         <div>

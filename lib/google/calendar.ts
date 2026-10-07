@@ -98,6 +98,10 @@ export async function createCalendarEvent(
 ): Promise<CalendarEventResult> {
   const config = getConfig();
 
+  if (process.env.NODE_ENV === "test" && !config.CALENDAR_DRY_RUN && !params.forceReal) {
+    throw new Error("Hard guard: CALENDAR_DRY_RUN must be active in test environment");
+  }
+
   if (config.CALENDAR_DRY_RUN && !params.forceReal) {
     return {
       id: `mock-event-${Date.now()}`,
@@ -161,6 +165,10 @@ export async function rescheduleCalendarEvent(
 ): Promise<CalendarEventResult> {
   const config = getConfig();
 
+  if (process.env.NODE_ENV === "test" && !config.CALENDAR_DRY_RUN && !forceReal) {
+    throw new Error("Hard guard: CALENDAR_DRY_RUN must be active in test environment");
+  }
+
   if ((config.CALENDAR_DRY_RUN && !forceReal) || eventId.startsWith("mock-")) {
     return { id: eventId };
   }
@@ -196,6 +204,10 @@ export async function cancelCalendarEvent(
   forceReal = false
 ): Promise<void> {
   const config = getConfig();
+
+  if (process.env.NODE_ENV === "test" && !config.CALENDAR_DRY_RUN && !forceReal) {
+    throw new Error("Hard guard: CALENDAR_DRY_RUN must be active in test environment");
+  }
 
   if ((config.CALENDAR_DRY_RUN && !forceReal) || eventId.startsWith("mock-")) {
     return;

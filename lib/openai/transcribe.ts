@@ -13,7 +13,6 @@ export async function transcribeAudio(
 
   const openai = new OpenAI({
     apiKey: config.OPENAI_API_KEY,
-    dangerouslyAllowBrowser: true,
   });
   const file = await toFile(audioBuffer, filename);
 

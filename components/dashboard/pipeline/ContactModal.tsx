@@ -68,7 +68,6 @@ export function ContactModal({ lead, isOpen, onClose, onSuccess }: ContactModalP
 
     const res = await sendManualMessageAction(
       lead.conversation.id,
-      lead.contact.wa_id,
       freeText.trim()
     );
 

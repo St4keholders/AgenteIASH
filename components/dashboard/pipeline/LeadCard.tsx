@@ -4,6 +4,7 @@ import React from "react";
 import { useDraggable } from "@dnd-kit/core";
 import { CSS } from "@dnd-kit/utilities";
 import { Calendar, Clock, MessageSquare } from "lucide-react";
+import { formatContactDisplayName } from "@/lib/contacts/format";
 
 export interface PipelineLeadItem {
   id: string;
@@ -22,6 +23,7 @@ export interface PipelineLeadItem {
     wa_id: string;
     phone?: string | null;
     bsuid?: string | null;
+    username?: string | null;
     name: string | null;
     email: string | null;
     company: string | null;
@@ -60,11 +62,7 @@ export function LeadCard({ lead, onClick, onContactClick }: LeadCardProps) {
     opacity: isDragging ? 0.4 : 1,
   };
 
-  const isBsuidOnly =
-    !lead.contact.phone &&
-    Boolean(lead.contact.bsuid || (lead.contact.wa_id && !/^\+?\d+$/.test(lead.contact.wa_id)));
-  const displayName =
-    lead.contact.name || (isBsuidOnly ? "Usuario de WhatsApp" : lead.contact.wa_id);
+  const displayName = formatContactDisplayName(lead.contact);
 
   // Temperatura discreta
   const tempBadge = () => {

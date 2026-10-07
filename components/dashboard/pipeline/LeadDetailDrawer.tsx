@@ -8,6 +8,7 @@ import {
   updateLeadDetailsAction,
   markAppointmentAttendanceAction,
 } from "@/app/dashboard/actions";
+import { formatContactDisplayName, formatContactSubtitle } from "@/lib/contacts/format";
 import { createBrowserClient } from "@/lib/supabase/client";
 import Link from "next/link";
 
@@ -155,10 +156,10 @@ export function LeadDetailDrawer({
         <div className="p-4 border-b border-[#E5E5E5] flex items-center justify-between bg-white shrink-0">
           <div>
             <h2 className="text-[15px] font-semibold text-[#0A0A0A]">
-              Detalle del Lead
+              {formatContactDisplayName(lead.contact)}
             </h2>
             <p className="text-[12px] text-[#525252]">
-              {lead.contact.phone || (lead.contact.name ? `Usuario de WhatsApp (${lead.contact.name})` : "Usuario de WhatsApp")}
+              {formatContactSubtitle(lead.contact)}
             </p>
           </div>
           <div className="flex items-center gap-2">

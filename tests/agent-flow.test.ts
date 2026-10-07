@@ -23,30 +23,28 @@ interface RequestHumanResult {
 
 describe("Agent Tool Calling Flow (check -> book -> reschedule -> cancel)", () => {
   const supabase = createAdminClient();
-  const testWaId = "TEST-agent-flow-99";
+  const testPhone = "579998000099";
   let contactId: string;
   let conversationId: string;
   let createdAppointmentId: string;
 
   beforeAll(async () => {
-    // 1. Crear contacto de prueba
-    const { data: contact } = await supabase
+    // 1. Crear contacto de prueba con teléfono sintético
+    const { data: contact, error: cErr } = await supabase
       .from("contacts")
-      .upsert(
-        {
-          wa_id: testWaId,
-          name: "Usuario de Prueba Flujo",
-          email: "usuario.test@example.com",
-        },
-        { onConflict: "wa_id" }
-      )
+      .insert({
+        phone: testPhone,
+        name: "Usuario de Prueba Flujo",
+        email: "usuario.test@example.com",
+      })
       .select("id")
       .single();
 
-    contactId = contact!.id;
+    if (cErr) throw cErr;
+    contactId = contact.id;
 
     // 2. Crear conversación de prueba
-    const { data: conv } = await supabase
+    const { data: conv, error: convErr } = await supabase
       .from("conversations")
       .insert({
         contact_id: contactId,
@@ -55,7 +53,8 @@ describe("Agent Tool Calling Flow (check -> book -> reschedule -> cancel)", () =
       .select("id")
       .single();
 
-    conversationId = conv!.id;
+    if (convErr) throw convErr;
+    conversationId = conv.id;
 
     // 3. Crear lead en etapa "Nuevo"
     const { data: nuevoStage } = await supabase
@@ -217,5 +216,19 @@ describe("Agent Tool Calling Flow (check -> book -> reschedule -> cancel)", () =
 
     expect(conv?.bot_enabled).toBe(false);
     expect(conv?.needs_human).toBe(true);
+  });
+
+  afterAll(async () => {
+    if (contactId) {
+      await supabase.from("messages").delete().eq("conversation_id", conversationId);
+      await supabase.from("conversations").delete().eq("id", conversationId);
+      await supabase.from("appointments").delete().eq("contact_id", contactId);
+      const { data: leads } = await supabase.from("leads").select("id").eq("contact_id", contactId);
+      if (leads && leads.length > 0) {
+        await supabase.from("lead_events").delete().in("lead_id", leads.map((l) => l.id));
+        await supabase.from("leads").delete().eq("contact_id", contactId);
+      }
+      await supabase.from("contacts").delete().eq("id", contactId);
+    }
   });
 });

@@ -3,8 +3,7 @@
 import type { Json, Database } from "@/lib/database.types";
 import { createSessionClient, createAdminClient } from "@/lib/supabase/server";
 import {
-  sendWhatsAppText,
-  sendWhatsAppTemplate,
+  sendToContact,
   listApprovedTemplates,
   type WhatsAppTemplate,
 } from "@/lib/whatsapp/client";
@@ -77,17 +76,27 @@ export async function resolveHumanHandoffAction(conversationId: string) {
 
 export async function updateContactAction(
   contactId: string,
-  data: { name: string; email: string; company: string }
+  data: {
+    name?: string | null;
+    username?: string | null;
+    phone?: string | null;
+    email?: string | null;
+    company?: string | null;
+  }
 ) {
   const supabase = await createSessionClient();
+  const updatePayload: Database["public"]["Tables"]["contacts"]["Update"] = {
+    updated_at: new Date().toISOString(),
+  };
+  if (data.name !== undefined) updatePayload.name = data.name || null;
+  if (data.username !== undefined) updatePayload.username = data.username || null;
+  if (data.phone !== undefined) updatePayload.phone = data.phone || null;
+  if (data.email !== undefined) updatePayload.email = data.email || null;
+  if (data.company !== undefined) updatePayload.company = data.company || null;
+
   const { error } = await supabase
     .from("contacts")
-    .update({
-      name: data.name || null,
-      email: data.email || null,
-      company: data.company || null,
-      updated_at: new Date().toISOString(),
-    })
+    .update(updatePayload)
     .eq("id", contactId);
 
   if (error) {
@@ -95,22 +104,54 @@ export async function updateContactAction(
   }
 
   safeRevalidate("/dashboard/conversaciones");
+  safeRevalidate("/dashboard/contactos");
+  safeRevalidate("/dashboard/pipeline");
   return { success: true };
+}
+
+export async function mergeContactsAction(
+  primaryContactId: string,
+  secondaryContactId: string
+) {
+  if (!primaryContactId || !secondaryContactId) {
+    return { error: "Se requieren ambos IDs de contacto para la fusión." };
+  }
+  if (primaryContactId === secondaryContactId) {
+    return { error: "No se puede fusionar un contacto consigo mismo." };
+  }
+
+  const supabase = createAdminClient();
+  const { data, error } = await supabase.rpc("merge_contacts", {
+    p_primary_contact_id: primaryContactId,
+    p_secondary_contact_id: secondaryContactId,
+  });
+
+  if (error) {
+    return { error: `Error fusionando contactos: ${error.message}` };
+  }
+
+  safeRevalidate("/dashboard/contactos");
+  safeRevalidate("/dashboard/conversaciones");
+  safeRevalidate("/dashboard/pipeline");
+  return { success: true, mergedContactId: data };
 }
 
 export async function markConversationReadAction(conversationId: string) {
   const supabase = await createSessionClient();
-  await supabase
+  const { error } = await supabase
     .from("conversations")
     .update({ unread_count: 0 })
     .eq("id", conversationId);
+
+  if (error) {
+    throw new Error(`Error marcando conversación como leída: ${error.message}`);
+  }
 
   return { success: true };
 }
 
 export async function sendManualMessageAction(
   conversationId: string,
-  contactPhone: string,
   text: string
 ) {
   if (!text.trim()) {
@@ -119,14 +160,18 @@ export async function sendManualMessageAction(
 
   const supabase = await createSessionClient();
 
-  // 1. Validar ventana de 24 horas
-  const { data: conv } = await supabase
+  // 1. Validar conversación y ventana de 24 horas
+  const { data: conv, error: convErr } = await supabase
     .from("conversations")
-    .select("last_inbound_at")
+    .select("id, contact_id, last_inbound_at")
     .eq("id", conversationId)
     .single();
 
-  if (!conv || !conv.last_inbound_at) {
+  if (convErr || !conv) {
+    return { error: `Conversación no encontrada: ${convErr?.message || conversationId}` };
+  }
+
+  if (!conv.last_inbound_at) {
     return { error: "No hay registro de interacción entrante para este contacto." };
   }
 
@@ -141,11 +186,11 @@ export async function sendManualMessageAction(
     };
   }
 
-  // 2. Enviar mensaje por WhatsApp
-  const sent = await sendWhatsAppText(contactPhone, text);
+  // 2. Enviar mensaje por WhatsApp usando el identificador canónico contact_id
+  const sent = await sendToContact(conv.contact_id, text);
 
   // 3. Guardar en base de datos con sender = human
-  await supabase.from("messages").insert({
+  const { error: msgErr } = await supabase.from("messages").insert({
     conversation_id: conversationId,
     wamid: sent.messageId,
     direction: "out",
@@ -155,14 +200,22 @@ export async function sendManualMessageAction(
     status: "sent",
   });
 
+  if (msgErr) {
+    throw new Error(`Error guardando mensaje manual: ${msgErr.message}`);
+  }
+
   // 4. Apagar automáticamente el bot en esta conversación
-  await supabase
+  const { error: updateErr } = await supabase
     .from("conversations")
     .update({
       bot_enabled: false,
       last_message_at: new Date().toISOString(),
     })
     .eq("id", conversationId);
+
+  if (updateErr) {
+    throw new Error(`Error actualizando conversación: ${updateErr.message}`);
+  }
 
   safeRevalidate("/dashboard/conversaciones");
   return { success: true, messageId: sent.messageId };
@@ -341,38 +394,33 @@ export async function sendTemplateMessageAction(
 ) {
   const supabase = await createSessionClient();
 
-  // 1. Obtener contacto y teléfono
-  const { data: contact, error: contactError } = await supabase
-    .from("contacts")
-    .select("id, wa_id, name")
-    .eq("id", contactId)
-    .single();
-
-  if (contactError || !contact) {
-    return { error: `Contacto no encontrado: ${contactError?.message || contactId}` };
-  }
-
-  // 2. Obtener o crear conversación
-  let { data: conversation } = await supabase
+  // 1. Obtener o crear conversación única del contacto
+  const { data: existingConv, error: convErr } = await supabase
     .from("conversations")
     .select("id")
     .eq("contact_id", contactId)
-    .single();
+    .maybeSingle();
+
+  if (convErr) {
+    return { error: `Error buscando conversación: ${convErr.message}` };
+  }
+
+  let conversation = existingConv;
 
   if (!conversation) {
-    const { data: newConv } = await supabase
+    const { data: newConv, error: newConvErr } = await supabase
       .from("conversations")
       .insert({ contact_id: contactId })
       .select("id")
       .single();
+
+    if (newConvErr || !newConv) {
+      return { error: `No se pudo crear conversación: ${newConvErr?.message || "error desconocido"}` };
+    }
     conversation = newConv;
   }
 
-  if (!conversation) {
-    return { error: "No se pudo obtener o crear la conversación para este contacto." };
-  }
-
-  // 3. Preparar componentes de plantilla
+  // 2. Preparar componentes de plantilla
   const components: Record<string, unknown>[] = [];
   if (variables.length > 0) {
     components.push({
@@ -384,18 +432,17 @@ export async function sendTemplateMessageAction(
     });
   }
 
-  // 4. Enviar mediante WhatsApp Cloud API
-  const sent = await sendWhatsAppTemplate(
-    contact.wa_id,
+  // 3. Enviar mediante WhatsApp Cloud API usando sendToContact (discrimina to / recipient)
+  const sent = await sendToContact(contactId, {
     templateName,
     languageCode,
-    components
-  );
+    components,
+  });
 
   const previewBody = `[Plantilla: ${templateName}] ${variables.join(" | ")}`.trim();
 
-  // 5. Guardar en messages
-  await supabase.from("messages").insert({
+  // 4. Guardar en messages
+  const { error: msgErr } = await supabase.from("messages").insert({
     conversation_id: conversation.id,
     wamid: sent.messageId,
     direction: "out",
@@ -405,8 +452,12 @@ export async function sendTemplateMessageAction(
     status: "sent",
   });
 
-  // 6. Actualizar conversación (apagar bot y actualizar timestamp)
-  await supabase
+  if (msgErr) {
+    throw new Error(`Error guardando mensaje de plantilla: ${msgErr.message}`);
+  }
+
+  // 5. Actualizar conversación (apagar bot y actualizar timestamp)
+  const { error: updateErr } = await supabase
     .from("conversations")
     .update({
       bot_enabled: false,
@@ -414,15 +465,19 @@ export async function sendTemplateMessageAction(
     })
     .eq("id", conversation.id);
 
-  // 7. Registrar evento en el lead si existe
+  if (updateErr) {
+    throw new Error(`Error actualizando conversación: ${updateErr.message}`);
+  }
+
+  // 6. Registrar evento en el lead si existe
   const { data: lead } = await supabase
     .from("leads")
     .select("id")
     .eq("contact_id", contactId)
-    .single();
+    .maybeSingle();
 
   if (lead) {
-    await supabase.from("lead_events").insert({
+    const { error: eventErr } = await supabase.from("lead_events").insert({
       lead_id: lead.id,
       type: "template_sent",
       actor: "human",
@@ -432,6 +487,9 @@ export async function sendTemplateMessageAction(
         variables,
       } as unknown as Json,
     });
+    if (eventErr) {
+      console.error("Error registrando evento de plantilla:", eventErr);
+    }
   }
 
   safeRevalidate("/dashboard/pipeline");
@@ -511,16 +569,24 @@ export async function publishAgentConfigAction(data: AgentConfigData) {
   const supabase = createAdminClient();
 
   // 1. Archivar cualquier versión publicada actual
-  await supabase
+  const { error: archiveErr } = await supabase
     .from("agent_configs")
     .update({ status: "archived" })
     .eq("status", "published");
 
+  if (archiveErr) {
+    throw new Error(`Error archivando configuración activa: ${archiveErr.message}`);
+  }
+
   // 2. Eliminar o archivar borradores existentes
-  await supabase
+  const { error: deleteErr } = await supabase
     .from("agent_configs")
     .delete()
     .eq("status", "draft");
+
+  if (deleteErr) {
+    throw new Error(`Error limpiando borradores: ${deleteErr.message}`);
+  }
 
   // 3. Determinar nueva versión
   const { data: maxRow } = await supabase

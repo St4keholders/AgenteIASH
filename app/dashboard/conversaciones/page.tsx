@@ -24,6 +24,7 @@ export default async function ConversacionesPage() {
         wa_id,
         phone,
         bsuid,
+        username,
         name,
         email,
         company
@@ -48,6 +49,8 @@ export default async function ConversacionesPage() {
         id: string;
         wa_id: string;
         phone: string | null;
+        bsuid: string | null;
+        username: string | null;
         name: string | null;
         email: string | null;
         company: string | null;
@@ -66,6 +69,8 @@ export default async function ConversacionesPage() {
           id: contact?.id || c.contact_id,
           wa_id: contact?.wa_id || "",
           phone: contact?.phone || null,
+          bsuid: contact?.bsuid || null,
+          username: contact?.username || null,
           name: contact?.name || null,
           email: contact?.email || null,
           company: contact?.company || null,

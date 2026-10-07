@@ -9,21 +9,6 @@ describe("Webhook Payloads & International Senders (BUG 2 Verification)", () => 
   const config = getConfig();
   const supabase = createAdminClient();
 
-  const testWaIds = [
-    "TEST-573001234567",     // Colombia (57)
-    "TEST-525512345678",     // México standard (52)
-    "TEST-5215512345678",    // México con prefijo móvil (521)
-    "TEST-541112345678",     // Argentina standard (54)
-    "TEST-5491112345678",    // Argentina con prefijo móvil (549)
-    "TEST-12025550123",      // Estados Unidos (1)
-    "TEST-bsuid-username-x", // BSUID / Username no numérico
-    "TEST-nocontacts-99",    // Payload con contacts[] vacío
-    "TEST-emoji-user-88",    // Nombre con emojis
-    "TEST-noname-user-77",   // Nombre ausente
-    "TEST-multi-user-1",     // Varios mensajes en un payload
-    "TEST-multi-user-2",
-  ];
-
   function makeSignedRequest(bodyObj: unknown) {
     const rawBody = JSON.stringify(bodyObj);
     const signature = `sha256=${crypto
@@ -41,16 +26,21 @@ describe("Webhook Payloads & International Senders (BUG 2 Verification)", () => 
     });
   }
 
+  const createdContactIds = new Set<string>();
+
   async function waitForContact(waId: string, timeoutMs = 6000) {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
       const { data } = await supabase
         .from("contacts")
-        .select("wa_id, name, phone, bsuid")
+        .select("id, wa_id, name, phone, bsuid")
         .eq("wa_id", waId)
         .maybeSingle();
 
-      if (data) return data;
+      if (data) {
+        createdContactIds.add(data.id);
+        return data;
+      }
       await new Promise((r) => setTimeout(r, 150));
     }
     return null;
@@ -77,18 +67,22 @@ describe("Webhook Payloads & International Senders (BUG 2 Verification)", () => 
   }
 
   afterAll(async () => {
-    // Limpieza estricta de todos los datos TEST-
-    for (const waId of testWaIds) {
-      const { data: c } = await supabase
-        .from("contacts")
-        .select("id")
-        .eq("wa_id", waId)
-        .maybeSingle();
-
-      if (c) {
-        await supabase.from("contacts").delete().eq("id", c.id);
-      }
+    // Wait for in-flight background webhook processing to settle
+    await new Promise((r) => setTimeout(r, 1500));
+    if (createdContactIds.size === 0) return;
+    const ids = Array.from(createdContactIds);
+    const { data: convs } = await supabase.from("conversations").select("id").in("contact_id", ids);
+    if (convs && convs.length > 0) {
+      await supabase.from("messages").delete().in("conversation_id", convs.map((c) => c.id));
+      await supabase.from("conversations").delete().in("contact_id", ids);
     }
+    await supabase.from("appointments").delete().in("contact_id", ids);
+    const { data: leads } = await supabase.from("leads").select("id").in("contact_id", ids);
+    if (leads && leads.length > 0) {
+      await supabase.from("lead_events").delete().in("lead_id", leads.map((l) => l.id));
+      await supabase.from("leads").delete().in("contact_id", ids);
+    }
+    await supabase.from("contacts").delete().in("id", ids);
   });
 
   it("processes Colombia number (57) preserving exact wa_id", async () => {
@@ -397,11 +391,14 @@ describe("Webhook Payloads & International Senders (BUG 2 Verification)", () => 
     const wamidMsg = `wamid.TEST_MIX_${Date.now()}`;
     const wamidStatus = `wamid.PREV_SENT_${Date.now()}`;
 
-    // Insert dummy outgoing message to receive status update
+    const contactUpsert = await supabase.from("contacts").upsert({ wa_id: waId }).select("id").single();
+    const contactId = contactUpsert.data!.id;
+    createdContactIds.add(contactId);
+
     const { data: conv } = await supabase
       .from("conversations")
       .insert({
-        contact_id: (await supabase.from("contacts").upsert({ wa_id: waId }).select("id").single()).data!.id,
+        contact_id: contactId,
         bot_enabled: true,
       })
       .select("id")
@@ -534,5 +531,5 @@ describe("Webhook Payloads & International Senders (BUG 2 Verification)", () => 
     expect(rawLogged).not.toContain(config.META_APP_SECRET);
 
     consoleLogSpy.mockRestore();
-  });
+  }, 15000);
 });

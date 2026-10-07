@@ -14,7 +14,10 @@ describe("Smoke Tests: Read-Only Provider Connectivity", () => {
 
   it("verifies OpenAI credentials by listing models", async () => {
     const config = getConfig();
-    const openai = new OpenAI({ apiKey: config.OPENAI_API_KEY, dangerouslyAllowBrowser: true });
+    const openai = new OpenAI({
+      apiKey: config.OPENAI_API_KEY,
+      dangerouslyAllowBrowser: typeof window !== "undefined",
+    });
     const models = await openai.models.list();
     expect(models.data.length).toBeGreaterThan(0);
   });

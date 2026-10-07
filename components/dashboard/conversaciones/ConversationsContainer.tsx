@@ -13,6 +13,7 @@ import {
   AppointmentDetailsData,
 } from "./ContactDetails";
 import { markConversationReadAction } from "@/app/dashboard/actions";
+import { formatContactDisplayName, formatContactSubtitle } from "@/lib/contacts/format";
 
 interface ConversationsContainerProps {
   initialConversations: ConversationItem[];
@@ -259,8 +260,8 @@ export function ConversationsContainer({
       {selectedConv ? (
         <MessageThread
           conversationId={selectedConv.id}
-          contactName={selectedConv.contact?.name || ""}
-          contactPhone={selectedConv.contact?.phone || selectedConv.contact?.wa_id || ""}
+          contactName={formatContactDisplayName(selectedConv.contact)}
+          contactSubtitle={formatContactSubtitle(selectedConv.contact)}
           lastInboundAt={selectedConv.last_inbound_at}
           messages={messages}
           onMessageSent={() => reloadCurrentConversation(selectedConv.id)}

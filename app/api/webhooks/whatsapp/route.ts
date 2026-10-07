@@ -2,10 +2,11 @@ import { NextRequest, NextResponse, after } from "next/server";
 import crypto from "crypto";
 import { getConfig } from "@/lib/config";
 import { createAdminClient } from "@/lib/supabase/server";
-import { sendWhatsAppText, downloadWhatsAppMedia } from "@/lib/whatsapp/client";
+import { sendToContact, downloadWhatsAppMedia } from "@/lib/whatsapp/client";
 import { transcribeAudio } from "@/lib/openai/transcribe";
 import { runAgentConversation } from "@/lib/agent/runner";
 import { formatError } from "@/lib/utils/format-error";
+import type { Json } from "@/lib/database.types";
 
 interface WhatsAppWebhookPayload {
   object?: string;
@@ -17,12 +18,13 @@ interface WhatsAppWebhookPayload {
         messaging_product?: string;
         metadata?: { display_phone_number?: string; phone_number_id?: string };
         contacts?: Array<{
-          profile?: { name?: string };
+          profile?: { name?: string; username?: string };
           wa_id?: string;
           user_id?: string;
         }>;
         messages?: Array<{
-          from: string;
+          from?: string;
+          from_user_id?: string;
           id: string;
           timestamp?: string;
           type: string;
@@ -40,6 +42,7 @@ interface WhatsAppWebhookPayload {
           status: string;
           timestamp?: string;
           recipient_id?: string;
+          recipient_user_id?: string;
           errors?: Array<unknown>;
         }>;
       };
@@ -47,22 +50,48 @@ interface WhatsAppWebhookPayload {
   }>;
 }
 
-function logEvent(event: Record<string, unknown>) {
-  console.log(JSON.stringify(event));
+function getCommitSha(): string {
+  return (
+    process.env.VERCEL_GIT_COMMIT_SHA ||
+    process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA ||
+    "local"
+  );
+}
+
+function logEvent(event: {
+  evt: string;
+  step?: string;
+  contact_id?: string | null;
+  conversation_id?: string | null;
+  wamid?: string | null;
+}) {
+  console.log(
+    JSON.stringify({
+      evt: event.evt,
+      commit: getCommitSha(),
+      step: event.step || null,
+      contact_id: event.contact_id || null,
+      conversation_id: event.conversation_id || null,
+      wamid: event.wamid || null,
+    })
+  );
 }
 
 function logError(errorData: {
   step: string;
-  wamid?: string | null;
+  contact_id?: string | null;
   conversation_id?: string | null;
+  wamid?: string | null;
   error: unknown;
 }) {
   console.error(
     JSON.stringify({
       evt: "webhook_error",
+      commit: getCommitSha(),
       step: errorData.step,
-      wamid: errorData.wamid || undefined,
-      conversation_id: errorData.conversation_id || undefined,
+      contact_id: errorData.contact_id || null,
+      conversation_id: errorData.conversation_id || null,
+      wamid: errorData.wamid || null,
       error: formatError(errorData.error),
     })
   );
@@ -87,7 +116,7 @@ export async function POST(req: NextRequest) {
   const config = getConfig();
   const rawBody = await req.text();
 
-  // 1. Validar firma HMAC SHA-256
+  // 1. Validar firma HMAC SHA-256 en tiempo constante
   const signature = req.headers.get("x-hub-signature-256");
   if (!signature) {
     return new NextResponse("Missing signature header", { status: 401 });
@@ -138,7 +167,7 @@ export async function POST(req: NextRequest) {
       }
     });
   } catch {
-    // Fuera del scope de Vercel/Next (ej: tests unitarios directos)
+    // Fuera del scope de Next / Vercel (ej: tests unitarios directos)
     void processWebhookPayload(payload, { mockOpenAI: isMockOpenAI }).catch((err: unknown) => {
       logError({
         step: "test_background",
@@ -164,7 +193,7 @@ async function processWebhookPayload(
       const val = change.value;
       if (!val) continue;
 
-      // Actualización de estados de mensajes salientes (sent, delivered, read, failed)
+      // 1. Actualización de estados de mensajes salientes (sent, delivered, read, failed)
       if (val.statuses && val.statuses.length > 0) {
         const validStatuses = ["sent", "delivered", "read", "failed"];
         for (const st of val.statuses) {
@@ -173,579 +202,326 @@ async function processWebhookPayload(
           const errorMsg = st.errors ? JSON.stringify(st.errors) : null;
 
           if (validStatuses.includes(status)) {
-            try {
-              await supabase
-                .from("messages")
-                .update({
-                  status,
-                  error: errorMsg,
-                })
-                .eq("wamid", wamid);
-            } catch (statusErr: unknown) {
+            const { error: statusUpdateErr } = await supabase
+              .from("messages")
+              .update({
+                status,
+                error: errorMsg,
+              })
+              .eq("wamid", wamid);
+
+            if (statusUpdateErr) {
               logError({
                 step: "status_update",
                 wamid,
-                error: statusErr instanceof Error ? statusErr.message : String(statusErr),
+                error: statusUpdateErr,
+              });
+            } else {
+              logEvent({
+                evt: "status_updated",
+                step: "status",
+                wamid,
               });
             }
           }
         }
       }
 
-      // Mensajes entrantes
+      // 2. Procesamiento de mensajes entrantes
       if (val.messages && val.messages.length > 0) {
-        const conversationsToProcess = new Map<
-          string,
-          { contactId: string; from: string; latestInsertedCreatedAt: string }
-        >();
+        const conversationsToProcess = new Map<string, { contactId: string }>();
 
         for (const msg of val.messages) {
           const wamid = msg.id;
+          logEvent({
+            evt: "webhook_received",
+            step: "receive",
+            wamid,
+          });
           const msgType = msg.type;
-          const timestamp = msg.timestamp
+          const sentAt = msg.timestamp
             ? new Date(Number(msg.timestamp) * 1000).toISOString()
             : new Date().toISOString();
 
-          const rawFrom = msg.from;
-          const rawUserId = msg.user_id;
+          // En Meta: BSUID y teléfono
+          const isPhoneStr = (s?: string | null) => {
+            if (!s) return false;
+            const clean = s.trim();
+            return (
+              /^\+?\d{6,16}$/.test(clean.replace(/[\s-]/g, "")) ||
+              (clean.startsWith("TEST-") && /\d{6,16}$/.test(clean.replace(/[\s-]/g, "")))
+            );
+          };
 
-          // Obtener perfil correspondiente a este remitente
-          const matchingContact =
-            val.contacts?.find(
-              (c) =>
-                (rawFrom && c.wa_id === rawFrom) ||
-                (rawUserId && c.user_id === rawUserId) ||
-                (rawFrom && c.user_id === rawFrom)
-            ) || val.contacts?.[0];
+          const fromStr = msg.from?.trim() || "";
+          const waIdStr = val.contacts?.[0]?.wa_id?.trim() || "";
 
-          const contactWaId = matchingContact?.wa_id;
-          const contactUserId = matchingContact?.user_id;
-          const rawProfileName = matchingContact?.profile?.name?.trim();
-          const profileName = rawProfileName && rawProfileName.length > 0 ? rawProfileName : null;
+          let phone: string | null = null;
+          if (isPhoneStr(fromStr)) {
+            phone = fromStr;
+          } else if (isPhoneStr(waIdStr)) {
+            phone = waIdStr;
+          }
 
-          // Determinar el identificador remitente efectivo (nunca vacío)
-          const from = (rawFrom || rawUserId || contactWaId || contactUserId || "").trim();
-          if (!from) {
+          let effectiveBsuid: string | null = null;
+          if (msg.from_user_id) {
+            effectiveBsuid = msg.from_user_id.trim();
+          } else if (fromStr && !isPhoneStr(fromStr)) {
+            effectiveBsuid = fromStr;
+          } else if (val.contacts?.[0]?.user_id) {
+            effectiveBsuid = val.contacts[0].user_id.trim();
+          } else if (msg.user_id) {
+            effectiveBsuid = msg.user_id.trim();
+          }
+
+          if (!effectiveBsuid && !phone) {
             logError({
-              step: "missing_sender_id",
+              step: "missing_identifiers",
               wamid,
-              error: "No sender identifier found in payload (from, user_id, and contacts empty)",
+              error: "Payload lacks both bsuid and phone identifiers",
             });
             continue;
           }
 
-          logEvent({
-            evt: "webhook_received",
-            wamid,
-            wa_id: from,
-          });
+          const rawName = val.contacts?.[0]?.profile?.name?.trim();
+          const name = rawName && rawName.length > 0 ? rawName : null;
 
-          // Determinar si hay teléfono numérico y/o BSUID
-          const isDigitsOnly = (str?: string | null): boolean =>
-            Boolean(str && /^\+?\d{6,16}$/.test(str.replace(/[\s-]/g, "")));
+          const rawUsername = val.contacts?.[0]?.profile?.username?.trim();
+          const username = rawUsername && rawUsername.length > 0 ? rawUsername : null;
 
-          const isBsuidFormat = (str?: string | null): boolean =>
-            Boolean(str && (/^[A-Za-z]{2}\.[A-Za-z0-9_-]+$/.test(str) || (!/^\d+$/.test(str) && str.length > 0)));
-
-          const idCandidates = [rawFrom, rawUserId, contactWaId, contactUserId].filter(Boolean) as string[];
-
-          const phoneCandidate = idCandidates.find(isDigitsOnly) || null;
-          const bsuidCandidate = idCandidates.find(isBsuidFormat) || null;
-
-          let extractedPhone: string | null = null;
-          let extractedBsuid: string | null = null;
-          let stableWaId: string = from;
-
-          if (phoneCandidate && bsuidCandidate) {
-            extractedPhone = phoneCandidate;
-            extractedBsuid = bsuidCandidate;
-            stableWaId = from;
-          } else if (phoneCandidate) {
-            extractedPhone = phoneCandidate;
-            extractedBsuid = null;
-            stableWaId = phoneCandidate;
-          } else if (bsuidCandidate) {
-            extractedPhone = null;
-            extractedBsuid = bsuidCandidate;
-            stableWaId = bsuidCandidate;
-          } else {
-            stableWaId = from;
-            if (/^\d+$/.test(from)) {
-              extractedPhone = from;
-            } else {
-              extractedBsuid = from;
-            }
-          }
-
-          let contactId: string;
-          try {
-            // Dual-key resolution: buscar contacto existente por cualquiera de sus identificadores
-            let existingContact: {
-              id: string;
-              wa_id: string;
-              phone: string | null;
-              bsuid: string | null;
-              name: string | null;
-            } | null = null;
-
-            if (extractedBsuid) {
-              const { data: byBsuid } = await supabase
-                .from("contacts")
-                .select("id, wa_id, phone, bsuid, name")
-                .or(`bsuid.eq.${extractedBsuid},wa_id.eq.${extractedBsuid}`)
-                .limit(1)
-                .maybeSingle();
-              if (byBsuid) existingContact = byBsuid;
-            }
-
-            if (!existingContact && extractedPhone) {
-              const { data: byPhone } = await supabase
-                .from("contacts")
-                .select("id, wa_id, phone, bsuid, name")
-                .or(`phone.eq.${extractedPhone},wa_id.eq.${extractedPhone}`)
-                .limit(1)
-                .maybeSingle();
-              if (byPhone) existingContact = byPhone;
-            }
-
-            if (!existingContact && stableWaId) {
-              const { data: byWaId } = await supabase
-                .from("contacts")
-                .select("id, wa_id, phone, bsuid, name")
-                .eq("wa_id", stableWaId)
-                .limit(1)
-                .maybeSingle();
-              if (byWaId) existingContact = byWaId;
-            }
-
-            if (existingContact) {
-              contactId = existingContact.id;
-              const updatePayload: {
-                updated_at: string;
-                name?: string | null;
-                phone?: string | null;
-                bsuid?: string | null;
-              } = {
-                updated_at: new Date().toISOString(),
-              };
-              if (profileName && !existingContact.name) {
-                updatePayload.name = profileName;
-              }
-              if (extractedPhone && !existingContact.phone) {
-                updatePayload.phone = extractedPhone;
-              }
-              if (extractedBsuid && !existingContact.bsuid) {
-                updatePayload.bsuid = extractedBsuid;
-              }
-              const { error: updateContactErr } = await supabase
-                .from("contacts")
-                .update(updatePayload)
-                .eq("id", contactId);
-
-              if (updateContactErr) throw updateContactErr;
-            } else {
-              // Insertar nuevo contacto
-              const { data: newContact, error: insertContactErr } = await supabase
-                .from("contacts")
-                .insert({
-                  wa_id: stableWaId,
-                  phone: extractedPhone,
-                  bsuid: extractedBsuid,
-                  name: profileName,
-                  updated_at: new Date().toISOString(),
-                })
-                .select("id")
-                .maybeSingle();
-
-              if (insertContactErr || !newContact) {
-                // Manejo de concurrencia o clave duplicada
-                let parallelContact: { id: string } | null = null;
-                if (extractedBsuid) {
-                  const { data } = await supabase
-                    .from("contacts")
-                    .select("id")
-                    .or(`bsuid.eq.${extractedBsuid},wa_id.eq.${extractedBsuid}`)
-                    .limit(1)
-                    .maybeSingle();
-                  if (data) parallelContact = data;
-                }
-                if (!parallelContact && extractedPhone) {
-                  const { data } = await supabase
-                    .from("contacts")
-                    .select("id")
-                    .or(`phone.eq.${extractedPhone},wa_id.eq.${extractedPhone}`)
-                    .limit(1)
-                    .maybeSingle();
-                  if (data) parallelContact = data;
-                }
-                if (!parallelContact && stableWaId) {
-                  const { data } = await supabase
-                    .from("contacts")
-                    .select("id")
-                    .eq("wa_id", stableWaId)
-                    .limit(1)
-                    .maybeSingle();
-                  if (data) parallelContact = data;
-                }
-
-                if (!parallelContact) {
-                  throw insertContactErr || new Error("Failed to insert contact");
-                }
-                contactId = parallelContact.id;
-              } else {
-                contactId = newContact.id;
-              }
-            }
-          } catch (cErr: unknown) {
-            logError({
-              step: "contact_upsert",
-              wamid,
-              error: cErr,
-            });
-            continue;
-          }
-
-          let conversationId: string;
-          try {
-            // 2. Obtener o crear conversación asociada al contacto
-            const { data: existingConv } = await supabase
-              .from("conversations")
-              .select("id, unread_count, bot_enabled")
-              .eq("contact_id", contactId)
-              .order("created_at", { ascending: false })
-              .limit(1)
-              .maybeSingle();
-
-            if (existingConv) {
-              conversationId = existingConv.id;
-              await supabase
-                .from("conversations")
-                .update({
-                  last_inbound_at: new Date().toISOString(),
-                  last_message_at: new Date().toISOString(),
-                  unread_count: (existingConv.unread_count || 0) + 1,
-                })
-                .eq("id", conversationId);
-            } else {
-              const { data: newConv, error: newConvErr } = await supabase
-                .from("conversations")
-                .insert({
-                  contact_id: contactId,
-                  last_inbound_at: new Date().toISOString(),
-                  last_message_at: new Date().toISOString(),
-                  unread_count: 1,
-                  bot_enabled: true,
-                })
-                .select("id")
-                .maybeSingle();
-
-              if (newConvErr || !newConv) {
-                const { data: parallelConv } = await supabase
-                  .from("conversations")
-                  .select("id")
-                  .eq("contact_id", contactId)
-                  .maybeSingle();
-
-                if (!parallelConv) {
-                  throw newConvErr || new Error("Failed to insert conversation");
-                }
-                conversationId = parallelConv.id;
-              } else {
-                conversationId = newConv.id;
-              }
-            }
-          } catch (convErr: unknown) {
-            logError({
-              step: "conversation_upsert",
-              wamid,
-              error: convErr,
-            });
-            continue;
-          }
-
-          // 3. Crear lead en etapa "nuevo" si no existe
-          try {
-            const { data: nuevoStage } = await supabase
-              .from("pipeline_stages")
-              .select("id")
-              .eq("key", "nuevo")
-              .maybeSingle();
-
-            if (nuevoStage) {
-              const { data: existingLead } = await supabase
-                .from("leads")
-                .select("id")
-                .eq("contact_id", contactId)
-                .maybeSingle();
-
-              if (!existingLead) {
-                const { data: insertedLead } = await supabase
-                  .from("leads")
-                  .insert({
-                    contact_id: contactId,
-                    stage_id: nuevoStage.id,
-                  })
-                  .select("id")
-                  .maybeSingle();
-
-                if (insertedLead) {
-                  await supabase.from("lead_events").insert({
-                    lead_id: insertedLead.id,
-                    type: "lead_created",
-                    to_stage_id: nuevoStage.id,
-                    actor: "bot",
-                  });
-                }
-              }
-            }
-          } catch (leadErr: unknown) {
-            // Error no bloqueante para el flujo de mensajería
-            logError({
-              step: "lead_event",
-              wamid,
-              conversation_id: conversationId,
-              error: leadErr,
-            });
-          }
-
-          // 4. Procesar multimedia o cuerpo según tipo
-          let textBody: string | null = null;
+          // Extraer cuerpo o multimedia
+          let body: string | null = null;
           let mediaId: string | null = null;
-          let storagePath: string | null = null;
-          let transcript: string | null = null;
-          let normalizedType: "text" | "audio" | "image" | "document" | "other" = "other";
 
-          if (msgType === "text") {
-            normalizedType = "text";
-            textBody = msg.text?.body || "";
-          } else if (msgType === "audio") {
-            normalizedType = "audio";
-            mediaId = msg.audio?.id || null;
-            if (mediaId) {
-              try {
-                const downloaded = await downloadWhatsAppMedia(mediaId);
-                const fileExt = downloaded.mimeType.includes("ogg") ? "ogg" : "mp3";
-                storagePath = `${conversationId}/${Date.now()}-${mediaId}.${fileExt}`;
-
-                await supabase.storage
-                  .from("media")
-                  .upload(storagePath, downloaded.buffer, {
-                    contentType: downloaded.mimeType,
-                    upsert: true,
-                  });
-
-                transcript = await transcribeAudio(downloaded.buffer, `audio.${fileExt}`);
-              } catch (audioErr) {
-                logError({
-                  step: "audio_transcription",
-                  wamid,
-                  conversation_id: conversationId,
-                  error: audioErr,
-                });
-              }
-            }
-          } else if (msgType === "image") {
-            normalizedType = "image";
-            mediaId = msg.image?.id || null;
-            textBody = msg.image?.caption || null;
-            if (mediaId) {
-              try {
-                const downloaded = await downloadWhatsAppMedia(mediaId);
-                storagePath = `${conversationId}/${Date.now()}-${mediaId}.jpg`;
-                await supabase.storage
-                  .from("media")
-                  .upload(storagePath, downloaded.buffer, {
-                    contentType: downloaded.mimeType,
-                    upsert: true,
-                  });
-              } catch (imgErr) {
-                logError({
-                  step: "image_download",
-                  wamid,
-                  conversation_id: conversationId,
-                  error: imgErr,
-                });
-              }
+          if (msgType === "text" && msg.text?.body) {
+            body = msg.text.body;
+          } else if (msgType === "audio" && msg.audio?.id) {
+            mediaId = msg.audio.id;
+            try {
+              const { buffer } = await downloadWhatsAppMedia(mediaId);
+              body = await transcribeAudio(buffer);
+            } catch (transcribeErr: unknown) {
+              logError({
+                step: "audio_transcription",
+                wamid,
+                error: transcribeErr,
+              });
+              body = "[Nota de voz no transcrita]";
             }
           } else if (msgType === "interactive") {
-            normalizedType = "text";
-            textBody =
+            body =
               msg.interactive?.button_reply?.title ||
               msg.interactive?.list_reply?.title ||
-              "";
+              "[Respuesta interactiva]";
           } else {
-            normalizedType = "other";
-            textBody = `[Archivo o mensaje tipo ${msgType}]`;
+            body = `[Mensaje de tipo ${msgType}]`;
           }
 
-          // 5. Inserción de mensaje con deduplicación por wamid
-          let insertedMsg: { id: string; created_at: string } | null = null;
-          try {
-            const { data, error: insertErr } = await supabase
-              .from("messages")
-              .insert({
-                conversation_id: conversationId,
-                wamid,
-                direction: "in",
-                sender: "contact",
-                type: normalizedType,
-                body: textBody,
-                transcript,
-                media_id: mediaId,
-                storage_path: storagePath,
-                status: "delivered",
-                raw: msg,
-                created_at: timestamp,
-              })
-              .select("id, created_at")
-              .maybeSingle();
-
-            if (insertErr || !data) {
-              if (insertErr?.code === "23505") {
-                // Deduplicación normal por reintento de webhook de Meta
-                continue;
-              }
-              throw insertErr || new Error("Failed to insert message");
+          // Ingesta atómica mediante RPC en Postgres
+          const { data: ingestResult, error: ingestError } = await supabase.rpc(
+            "ingest_inbound_message",
+            {
+              p_wamid: wamid,
+              p_bsuid: effectiveBsuid,
+              p_phone: phone,
+              p_name: name,
+              p_username: username,
+              p_type: msgType,
+              p_body: body,
+              p_media_id: mediaId,
+              p_raw: msg as unknown as Json,
+              p_sent_at: sentAt,
             }
-            insertedMsg = data;
-          } catch (mErr: unknown) {
+          );
+
+          if (ingestError || !ingestResult || ingestResult.length === 0) {
             logError({
-              step: "message_insert",
+              step: "ingest_rpc",
               wamid,
-              conversation_id: conversationId,
-              error: mErr,
+              error: ingestError || "No result from ingest_inbound_message",
             });
             continue;
           }
 
+          const row = ingestResult[0];
+          const contactId = row.contact_id;
+          const conversationId = row.conversation_id;
+          const isNew = row.is_new_message;
+
           logEvent({
-            evt: "message_stored",
-            wamid,
+            evt: isNew ? "message_stored" : "message_duplicate_ignored",
+            step: "ingest",
+            contact_id: contactId,
             conversation_id: conversationId,
+            wamid,
           });
 
-          // Registrar conversación afectada
-          conversationsToProcess.set(conversationId, {
-            contactId,
-            from,
-            latestInsertedCreatedAt: insertedMsg.created_at,
-          });
+          conversationsToProcess.set(conversationId, { contactId });
         }
 
-        // Procesar concurrentemente cada conversación afectada
+        // 3. Procesar concurrentemente cada conversación afectada
         await Promise.all(
           Array.from(conversationsToProcess.entries()).map(
-            async ([conversationId, { contactId, from, latestInsertedCreatedAt }]) => {
-              // Debounce estricto por conversation_id
+            async ([conversationId, { contactId }]) => {
+              // Debounce configurable (150ms en test / synthetic, o MESSAGE_DEBOUNCE_MS)
               const debounceMs =
-                from.startsWith("TEST-") || process.env.NODE_ENV === "test"
+                process.env.NODE_ENV === "test"
                   ? 150
                   : config.MESSAGE_DEBOUNCE_MS || 3000;
               await new Promise((resolve) => setTimeout(resolve, debounceMs));
 
-              // Verificar si llegó un mensaje entrante más reciente en esta conversación
-              const { data: newerInbound } = await supabase
-                .from("messages")
-                .select("id")
-                .eq("conversation_id", conversationId)
-                .eq("direction", "in")
-                .gt("created_at", latestInsertedCreatedAt)
-                .limit(1);
+              let keepProcessing = true;
+              let rounds = 0;
+              const maxRounds = 5;
 
-              if (newerInbound && newerInbound.length > 0) {
-                return;
-              }
+              while (keepProcessing && rounds < maxRounds) {
+                rounds++;
 
-              // Verificar si ya existe una respuesta posterior del bot para esta conversación
-              const { data: latestMsg } = await supabase
-                .from("messages")
-                .select("direction, sender, created_at")
-                .eq("conversation_id", conversationId)
-                .order("created_at", { ascending: false })
-                .limit(1)
-                .maybeSingle();
+                // Verificar si el bot está habilitado globalmente y en esta conversación
+                const [{ data: globalSetting, error: globalErr }, { data: convCurrent, error: convErr }] =
+                  await Promise.all([
+                    supabase
+                      .from("settings")
+                      .select("value")
+                      .eq("key", "bot_global_enabled")
+                      .maybeSingle(),
+                    supabase
+                      .from("conversations")
+                      .select("id, contact_id, bot_enabled, last_processed_inbound_at")
+                      .eq("id", conversationId)
+                      .single(),
+                  ]);
 
-              if (
-                latestMsg &&
-                latestMsg.direction === "out" &&
-                latestMsg.sender === "bot" &&
-                new Date(latestMsg.created_at) >= new Date(latestInsertedCreatedAt)
-              ) {
-                return;
-              }
+                if (globalErr) {
+                  logError({
+                    step: "load_global_setting",
+                    conversation_id: conversationId,
+                    contact_id: contactId,
+                    error: globalErr,
+                  });
+                }
 
-              // Verificar estado del bot global y para esta conversación
-              const { data: globalSetting } = await supabase
-                .from("settings")
-                .select("value")
-                .eq("key", "bot_global_enabled")
-                .maybeSingle();
+                if (convErr || !convCurrent) {
+                  logError({
+                    step: "load_conversation",
+                    conversation_id: conversationId,
+                    contact_id: contactId,
+                    error: convErr || "Conversation not found",
+                  });
+                  return;
+                }
 
-              const isGlobalEnabled = globalSetting ? Boolean(globalSetting.value) : true;
+                const isGlobalEnabled = globalSetting ? Boolean(globalSetting.value) : true;
+                if (!isGlobalEnabled || !convCurrent.bot_enabled) {
+                  return;
+                }
 
-              const { data: convCurrent } = await supabase
-                .from("conversations")
-                .select("bot_enabled")
-                .eq("id", conversationId)
-                .maybeSingle();
+                // Adquisición de bloqueo atómico por conversation_id (120 s)
+                const { data: lockAcquired, error: lockErr } = await supabase.rpc(
+                  "acquire_conversation_lock",
+                  {
+                    p_conversation_id: conversationId,
+                    p_lock_duration_seconds: 120,
+                  }
+                );
 
-              if (!isGlobalEnabled || !convCurrent?.bot_enabled) {
-                return;
-              }
+                if (lockErr) {
+                  logError({
+                    step: "acquire_lock",
+                    conversation_id: conversationId,
+                    contact_id: contactId,
+                    error: lockErr,
+                  });
+                  return;
+                }
 
-              // Adquisición de bloqueo atómico por conversation_id (120 segundos de expiración automática)
-              const { data: lockAcquired } = await supabase.rpc("acquire_conversation_lock", {
-                p_conversation_id: conversationId,
-                p_lock_duration_seconds: 120,
-              });
+                if (!lockAcquired) {
+                  return;
+                }
 
-              if (!lockAcquired) {
-                return;
-              }
+                let latestReceivedAt: string | null = null;
+                try {
+                  // Consultar mensajes entrantes pendientes (con received_at > last_processed_inbound_at)
+                  let pendingQuery = supabase
+                    .from("messages")
+                    .select("id, received_at, body, transcript, type")
+                    .eq("conversation_id", conversationId)
+                    .eq("direction", "in")
+                    .order("received_at", { ascending: true });
 
-              // Bucle de catch-up bajo el bloqueo
-              try {
-                let hasPendingMessages = true;
-                let round = 0;
-                const maxRounds = 5;
+                  if (convCurrent.last_processed_inbound_at) {
+                    pendingQuery = pendingQuery.gt(
+                      "received_at",
+                      convCurrent.last_processed_inbound_at
+                    );
+                  }
 
-                while (hasPendingMessages && round < maxRounds) {
-                  round++;
-                  const roundStartTimestamp = new Date().toISOString();
+                  const { data: pendingInbound, error: pendingErr } = await pendingQuery;
+                  if (pendingErr) {
+                    logError({
+                      step: "query_pending_messages",
+                      conversation_id: conversationId,
+                      contact_id: contactId,
+                      error: pendingErr,
+                    });
+                    return;
+                  }
 
+                  if (!pendingInbound || pendingInbound.length === 0) {
+                    return;
+                  }
+
+                  latestReceivedAt =
+                    pendingInbound[pendingInbound.length - 1].received_at;
+
+                  // PASO 2: Verificar que conversation.contact_id coincida con contactId
+                  if (convCurrent.contact_id !== contactId) {
+                    logError({
+                      step: "contact_mismatch",
+                      conversation_id: conversationId,
+                      contact_id: contactId,
+                      error: `conversation.contact_id (${convCurrent.contact_id}) does not match contactId (${contactId})`,
+                    });
+                    return;
+                  }
+
+                  // Ejecutar agente de IA para responder a los mensajes
                   let replyText: string;
                   try {
-                    const result = await runAgentConversation(
+                    const agentRes = await runAgentConversation(
                       conversationId,
                       contactId,
                       undefined,
                       undefined,
                       options
                     );
-                    replyText = result.reply;
+                    replyText = agentRes.reply;
                   } catch (agentErr: unknown) {
                     logError({
                       step: "agent_runner",
                       conversation_id: conversationId,
+                      contact_id: contactId,
                       error: agentErr,
                     });
                     replyText =
                       "Hola, en este momento experimentamos una alta demanda técnica. Ya registré tu solicitud y un asesor de nuestro equipo te atenderá a la brevedad.";
                   }
 
+                  // PASO 2: Enviar mediante sendToContact (to para celular, recipient para BSUID)
                   let replyMessageId: string | null = null;
                   try {
-                    const sent = await sendWhatsAppText(from, replyText);
+                    const sent = await sendToContact(contactId, replyText);
                     replyMessageId = sent.messageId;
                   } catch (sendErr: unknown) {
                     logError({
                       step: "whatsapp_send",
                       conversation_id: conversationId,
+                      contact_id: contactId,
                       error: sendErr,
                     });
                   }
 
-                  await supabase.from("messages").insert({
+                  const { error: insertOutErr } = await supabase.from("messages").insert({
                     conversation_id: conversationId,
                     wamid: replyMessageId,
                     direction: "out",
@@ -755,30 +531,79 @@ async function processWebhookPayload(
                     status: replyMessageId ? "sent" : "failed",
                   });
 
-                  if (replyMessageId) {
-                    logEvent({
-                      evt: "reply_sent",
-                      wamid: replyMessageId,
+                  if (insertOutErr) {
+                    logError({
+                      step: "outbound_message_insert",
                       conversation_id: conversationId,
+                      contact_id: contactId,
+                      wamid: replyMessageId,
+                      error: insertOutErr,
                     });
                   }
 
-                  await new Promise((resolve) => setTimeout(resolve, from.startsWith("TEST-") ? 100 : 1500));
+                  // Actualizar conversations.last_processed_inbound_at
+                  const { error: updateConvErr } = await supabase
+                    .from("conversations")
+                    .update({
+                      last_processed_inbound_at: latestReceivedAt,
+                      last_message_at: new Date().toISOString(),
+                    })
+                    .eq("id", conversationId);
 
-                  const { data: pendingInbound } = await supabase
+                  if (updateConvErr) {
+                    logError({
+                      step: "update_conversation_processed",
+                      conversation_id: conversationId,
+                      contact_id: contactId,
+                      error: updateConvErr,
+                    });
+                  }
+
+                  if (replyMessageId) {
+                    logEvent({
+                      evt: "reply_sent",
+                      step: "reply",
+                      wamid: replyMessageId,
+                      contact_id: contactId,
+                      conversation_id: conversationId,
+                    });
+                  }
+                } finally {
+                  // Liberar el bloqueo atómico
+                  const { error: releaseErr } = await supabase.rpc(
+                    "release_conversation_lock",
+                    {
+                      p_conversation_id: conversationId,
+                    }
+                  );
+                  if (releaseErr) {
+                    logError({
+                      step: "release_lock",
+                      conversation_id: conversationId,
+                      contact_id: contactId,
+                      error: releaseErr,
+                    });
+                  }
+                }
+
+                // PASO 4: Después de liberar el bloqueo, revisar si quedaron entrantes sin procesar
+                if (latestReceivedAt) {
+                  const { data: remainingInbound, error: remainErr } = await supabase
                     .from("messages")
                     .select("id")
                     .eq("conversation_id", conversationId)
                     .eq("direction", "in")
-                    .gte("created_at", roundStartTimestamp)
+                    .gt("received_at", latestReceivedAt)
                     .limit(1);
 
-                  hasPendingMessages = Boolean(pendingInbound && pendingInbound.length > 0);
+                  if (!remainErr && remainingInbound && remainingInbound.length > 0) {
+                    keepProcessing = true;
+                  } else {
+                    keepProcessing = false;
+                  }
+                } else {
+                  keepProcessing = false;
                 }
-              } finally {
-                await supabase.rpc("release_conversation_lock", {
-                  p_conversation_id: conversationId,
-                });
               }
             }
           )

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { MessageSquare, Columns3, Calendar, Settings, LogOut } from "lucide-react";
+import { MessageSquare, Columns3, Calendar, Settings, LogOut, Users } from "lucide-react";
 import { logoutAction } from "@/app/auth/actions";
 
 interface SidebarProps {
@@ -14,6 +14,11 @@ const navItems = [
     name: "Conversaciones",
     href: "/dashboard/conversaciones",
     icon: MessageSquare,
+  },
+  {
+    name: "Contactos",
+    href: "/dashboard/contactos",
+    icon: Users,
   },
   {
     name: "Pipeline",

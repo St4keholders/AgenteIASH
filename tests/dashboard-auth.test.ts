@@ -154,7 +154,6 @@ describe("Dashboard Auth, Server Actions & 24h Window", () => {
     // conversation last_inbound_at is 25 hours ago
     const res = await sendManualMessageAction(
       conversationId,
-      "+5799900000011",
       "Hola cliente"
     );
     expect(res.error).toContain("La ventana de 24 h está cerrada");
@@ -172,7 +171,6 @@ describe("Dashboard Auth, Server Actions & 24h Window", () => {
 
     const res = await sendManualMessageAction(
       conversationId,
-      "+5799900000011",
       "Hola, respuesta de asesor humano"
     );
 

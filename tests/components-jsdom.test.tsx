@@ -59,7 +59,7 @@ describe("Dashboard Components (JSDOM)", () => {
       />
     );
 
-    expect(screen.getByText("Carlos Contador")).toBeInTheDocument();
+    expect(screen.getByText(/Carlos Contador/)).toBeInTheDocument();
     expect(screen.getByText("Hola necesito cita")).toBeInTheDocument();
     expect(screen.getAllByText("Humano").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("2")).toBeInTheDocument();
@@ -86,7 +86,7 @@ describe("Dashboard Components (JSDOM)", () => {
       <MessageThread
         conversationId="conv-1"
         contactName="Carlos Contador"
-        contactPhone="+5799900000013"
+        contactSubtitle="+5799900000013"
         lastInboundAt={new Date(Date.now() - 30 * 60 * 1000).toISOString()} // 30 min ago
         messages={mockMessages}
       />

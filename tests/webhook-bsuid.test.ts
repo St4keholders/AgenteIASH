@@ -1,4 +1,4 @@
-import { describe, it, expect, afterAll, beforeAll } from "vitest";
+import { describe, it, expect, afterAll } from "vitest";
 import { POST } from "@/app/api/webhooks/whatsapp/route";
 import { NextRequest } from "next/server";
 import crypto from "crypto";
@@ -9,14 +9,6 @@ import { formatError } from "@/lib/utils/format-error";
 describe("Webhook BSUID & Error Serialization Support", () => {
   const config = getConfig();
   const supabase = createAdminClient();
-
-  const cleanupWaIds = [
-    "CO.TEST0000000001",
-    "CO.TEST0000000002",
-    "5799900000001",
-    "5799900000002",
-    "CO.TEST0000000003",
-  ];
 
   function makeSignedRequest(bodyObj: unknown) {
     const rawBody = JSON.stringify(bodyObj);
@@ -35,24 +27,13 @@ describe("Webhook BSUID & Error Serialization Support", () => {
     });
   }
 
+  const createdContactIds = new Set<string>();
+
   async function cleanTestData() {
-    for (const id of cleanupWaIds) {
-      const { data: contacts } = await supabase
-        .from("contacts")
-        .select("id")
-        .or(`wa_id.eq.${id},phone.eq.${id},bsuid.eq.${id}`);
-
-      if (contacts && contacts.length > 0) {
-        for (const c of contacts) {
-          await supabase.from("contacts").delete().eq("id", c.id);
-        }
-      }
-    }
+    if (createdContactIds.size === 0) return;
+    const ids = Array.from(createdContactIds);
+    await supabase.from("contacts").delete().in("id", ids);
   }
-
-  beforeAll(async () => {
-    await cleanTestData();
-  });
 
   afterAll(async () => {
     await cleanTestData();
@@ -71,6 +52,7 @@ describe("Webhook BSUID & Error Serialization Support", () => {
 
       const { data } = await q.maybeSingle();
       if (data) {
+        createdContactIds.add(data.id);
         if (!query.expectedName || data.name === query.expectedName) {
           return data;
         }
@@ -437,16 +419,25 @@ describe("Webhook BSUID & Error Serialization Support", () => {
       expect(msg2).not.toBeNull();
 
       // Comprobar que NO se crearon duplicados en la base de datos
-      const { data: allMatches } = await supabase
+      const { data: phoneContact } = await supabase
         .from("contacts")
         .select("id, phone, bsuid, name")
-        .or(`phone.eq.${phone},bsuid.eq.${bsuid}`);
+        .eq("phone", phone)
+        .maybeSingle();
 
-      // Debe ser exactamente 1 solo contacto
-      expect(allMatches?.length).toBe(1);
-      expect(allMatches![0].id).toBe(originalContactId);
-      expect(allMatches![0].phone).toBe(phone);
-      expect(allMatches![0].bsuid).toBe(bsuid);
+      const { data: bsuidContact } = await supabase
+        .from("contacts")
+        .select("id, phone, bsuid, name")
+        .eq("bsuid", bsuid)
+        .maybeSingle();
+
+      // Debe ser exactamente el mismo contacto unificado
+      expect(phoneContact).not.toBeNull();
+      expect(bsuidContact).not.toBeNull();
+      expect(phoneContact?.id).toBe(bsuidContact?.id);
+      expect(phoneContact?.id).toBe(originalContactId);
+      expect(phoneContact?.phone).toBe(phone);
+      expect(phoneContact?.bsuid).toBe(bsuid);
 
       // Ambas rondas se registraron en la misma conversación
       const { data: convMessages } = await supabase
